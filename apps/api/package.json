@@ -1,0 +1,13 @@
+{
+  "name": "@swiftserve/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SwiftServe service-request REST API",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=20" }
+}
