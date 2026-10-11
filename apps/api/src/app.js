@@ -101,8 +101,26 @@ export async function requestHandler(req, res) {
         database: database.connected ? 'connected' : 'not_configured'
       });
     } catch (err) {
-      // Log allowlisted diagnostic metadata only. Never log the connection string, password, or raw error message.
+      // Classify known PostgreSQL errors without logging the raw message or any credentials.
+      const safeMessage = typeof err?.message === 'string' ? err.message.toLowerCase() : '';
+      let diagnostic = 'OTHER_DATABASE_ERROR';
+      if (safeMessage.includes('tenant or user not found') || safeMessage.includes('tenant not found')) {
+        diagnostic = 'POOLER_TENANT_OR_USER_NOT_FOUND';
+      } else if (safeMessage.includes('password authentication failed') || safeMessage.includes('invalid password')) {
+        diagnostic = 'PASSWORD_AUTHENTICATION_FAILED';
+      } else if (safeMessage.includes('no pg_hba.conf entry')) {
+        diagnostic = 'CONNECTION_POLICY_REJECTED';
+      } else if (safeMessage.includes('certificate') || safeMessage.includes('ssl')) {
+        diagnostic = 'SSL_CONFIGURATION_ERROR';
+      } else if (safeMessage.includes('does not exist') && safeMessage.includes('database')) {
+        diagnostic = 'DATABASE_NAME_NOT_FOUND';
+      } else if (err?.code === 'ETIMEDOUT' || err?.name === 'TimeoutError') {
+        diagnostic = 'CONNECTION_TIMEOUT';
+      } else if (typeof err?.code === 'string' && err.code.startsWith('ECONN')) {
+        diagnostic = 'NETWORK_CONNECTION_ERROR';
+      }
       console.error('Database health check failed:', {
+        diagnostic,
         code: typeof err?.code === 'string' ? err.code : 'NO_CODE',
         name: typeof err?.name === 'string' ? err.name : 'UNKNOWN_ERROR',
         severity: typeof err?.severity === 'string' ? err.severity : undefined,
