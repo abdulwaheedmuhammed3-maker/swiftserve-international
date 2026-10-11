@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createJob, deleteJob, getJob, listJobs, resetStore, updateJob } from './repository.js';
+import { checkDatabase, createJob, deleteJob, getJob, listJobs, resetStore, updateJob } from './repository.js';
 
 const ALLOWED_SERVICES = new Set([
   'cleaning', 'laundry', 'electrical', 'plumbing',
@@ -94,7 +94,15 @@ function parseRoute(urlPath) {
 export async function requestHandler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/health' && req.method === 'GET') {
-    return json(res, 200, { status: 'ok', database: process.env.DATABASE_URL ? 'configured' : 'not_configured' });
+    try {
+      const database = await checkDatabase();
+      return json(res, 200, {
+        status: 'ok',
+        database: database.connected ? 'connected' : 'not_configured'
+      });
+    } catch {
+      return json(res, 200, { status: 'ok', database: 'unreachable' });
+    }
   }
 
   const id = parseRoute(url.pathname);
