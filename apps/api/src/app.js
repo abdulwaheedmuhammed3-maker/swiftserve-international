@@ -101,8 +101,15 @@ export async function requestHandler(req, res) {
         database: database.connected ? 'connected' : 'not_configured'
       });
     } catch (err) {
-      // Log only a safe error identifier. Do not log connection strings or raw driver messages.
-      console.error('Database health check failed:', err?.code ?? err?.name ?? 'UNKNOWN_DATABASE_ERROR');
+      // Log allowlisted diagnostic metadata only. Never log the connection string, password, or raw error message.
+      console.error('Database health check failed:', {
+        code: typeof err?.code === 'string' ? err.code : 'NO_CODE',
+        name: typeof err?.name === 'string' ? err.name : 'UNKNOWN_ERROR',
+        severity: typeof err?.severity === 'string' ? err.severity : undefined,
+        syscall: typeof err?.syscall === 'string' ? err.syscall : undefined,
+        errno: typeof err?.errno === 'number' || typeof err?.errno === 'string' ? err.errno : undefined,
+        timeout: err?.code === 'ETIMEDOUT' || err?.name === 'TimeoutError'
+      });
       return json(res, 200, { status: 'ok', database: 'unreachable' });
     }
   }
