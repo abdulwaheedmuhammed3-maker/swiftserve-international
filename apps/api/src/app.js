@@ -87,7 +87,7 @@ function validatePatch(body) {
 }
 
 function parseRoute(urlPath) {
-  const match = urlPath.match(/^\/api\/v1\/jobs(?:\/([^/]+))?$/);
+  const match = urlPath.match(/^\\/api\\/v1\\/jobs(?:\\/([^/]+))?$/);
   return match ? match[1] ?? null : undefined;
 }
 
@@ -100,7 +100,9 @@ export async function requestHandler(req, res) {
         status: 'ok',
         database: database.connected ? 'connected' : 'not_configured'
       });
-    } catch {
+    } catch (err) {
+      // Log only a safe error identifier. Do not log connection strings or raw driver messages.
+      console.error('Database health check failed:', err?.code ?? err?.name ?? 'UNKNOWN_DATABASE_ERROR');
       return json(res, 200, { status: 'ok', database: 'unreachable' });
     }
   }
