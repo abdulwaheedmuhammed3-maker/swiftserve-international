@@ -1,15 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import { createJob, deleteJob, getJob, listJobs, resetStore, updateJob } from './repository.js';
 
 const ALLOWED_SERVICES = new Set([
   'cleaning', 'laundry', 'electrical', 'plumbing',
   'ac-repair', 'appliance-repair', 'errand'
 ]);
 const ALLOWED_STATUSES = new Set(['pending', 'accepted', 'completed', 'cancelled']);
-const store = new Map();
 
-export function resetStore() {
-  store.clear();
-}
+export { resetStore };
 
 function json(res, statusCode, body) {
   const payload = body === undefined ? '' : JSON.stringify(body);
@@ -25,7 +23,16 @@ function errorResponse(code, message, details = []) {
 
 async function readJsonBody(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let length = 0;
+  for await (const chunk of req) {
+    length += chunk.length;
+    if (length > 1024 * 1024) {
+      const err = new Error('Request body exceeds 1 MB.');
+      err.code = 'BODY_TOO_LARGE';
+      throw err;
+    }
+    chunks.push(chunk);
+  }
   const raw = Buffer.concat(chunks).toString('utf8');
   if (!raw.trim()) return {};
   try {
@@ -79,19 +86,6 @@ function validatePatch(body) {
   return details;
 }
 
-function makeJob(body) {
-  const now = new Date().toISOString();
-  return {
-    id: randomUUID(),
-    service: body.service,
-    description: body.description.trim(),
-    area: body.area.trim(),
-    status: 'pending',
-    createdAt: now,
-    updatedAt: now
-  };
-}
-
 function parseRoute(urlPath) {
   const match = urlPath.match(/^\/api\/v1\/jobs(?:\/([^/]+))?$/);
   return match ? match[1] ?? null : undefined;
@@ -99,10 +93,12 @@ function parseRoute(urlPath) {
 
 export async function requestHandler(req, res) {
   const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/health' && req.method === 'GET') {
+    return json(res, 200, { status: 'ok', database: process.env.DATABASE_URL ? 'configured' : 'not_configured' });
+  }
+
   const id = parseRoute(url.pathname);
-
   if (id === undefined) return json(res, 404, errorResponse('NOT_FOUND', 'Route not found.'));
-
   if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method)) {
     res.setHeader('Allow', id === null ? 'GET, POST' : 'GET, PATCH, DELETE');
     return json(res, 405, errorResponse('METHOD_NOT_ALLOWED', 'HTTP method is not supported for this route.'));
@@ -116,7 +112,7 @@ export async function requestHandler(req, res) {
           `status must be one of: ${[...ALLOWED_STATUSES].join(', ')}.`
         ]));
       }
-      const items = [...store.values()].filter(job => !status || job.status === status);
+      const items = await listJobs(status);
       return json(res, 200, { data: items, count: items.length });
     }
 
@@ -124,38 +120,44 @@ export async function requestHandler(req, res) {
       const body = await readJsonBody(req);
       const details = validateCreate(body);
       if (details.length) return json(res, 422, errorResponse('VALIDATION_ERROR', 'Request validation failed.', details));
-      const job = makeJob(body);
-      store.set(job.id, job);
-      return json(res, 201, { data: job });
+      const now = new Date().toISOString();
+      const job = {
+        id: randomUUID(),
+        service: body.service,
+        description: body.description.trim(),
+        area: body.area.trim(),
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now
+      };
+      return json(res, 201, { data: await createJob(job) });
     }
 
-    if (!store.has(id)) return json(res, 404, errorResponse('JOB_NOT_FOUND', `No service request exists with id '${id}'.`));
-
-    if (req.method === 'GET') return json(res, 200, { data: store.get(id) });
+    const current = await getJob(id);
+    if (!current) return json(res, 404, errorResponse('JOB_NOT_FOUND', `No service request exists with id '${id}'.`));
+    if (req.method === 'GET') return json(res, 200, { data: current });
 
     if (req.method === 'PATCH') {
       const body = await readJsonBody(req);
       const details = validatePatch(body);
       if (details.length) return json(res, 422, errorResponse('VALIDATION_ERROR', 'Request validation failed.', details));
-      const current = store.get(id);
-      const updated = {
-        ...current,
+      const patch = {
         ...body,
-        description: 'description' in body ? body.description.trim() : current.description,
-        area: 'area' in body ? body.area.trim() : current.area,
-        updatedAt: new Date().toISOString()
+        ...(typeof body.description === 'string' ? { description: body.description.trim() } : {}),
+        ...(typeof body.area === 'string' ? { area: body.area.trim() } : {})
       };
-      store.set(id, updated);
-      return json(res, 200, { data: updated });
+      return json(res, 200, { data: await updateJob(id, patch) });
     }
 
     if (req.method === 'DELETE') {
-      store.delete(id);
+      await deleteJob(id);
       res.statusCode = 204;
-      res.end();
+      return res.end();
     }
   } catch (err) {
     if (err?.code === 'INVALID_JSON') return json(res, 400, errorResponse('INVALID_JSON', err.message));
+    if (err?.code === 'BODY_TOO_LARGE') return json(res, 413, errorResponse('BODY_TOO_LARGE', err.message));
+    console.error('Request failed:', err?.message);
     return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
   }
 }
