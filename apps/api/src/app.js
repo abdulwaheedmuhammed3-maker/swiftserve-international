@@ -87,7 +87,7 @@ function validatePatch(body) {
 }
 
 function parseRoute(urlPath) {
-  const match = urlPath.match(/^\\/api\\/v1\\/jobs(?:\\/([^/]+))?$/);
+  const match = urlPath.match(/^\/api\/v1\/jobs(?:\/([^/]+))?$/);
   return match ? match[1] ?? null : undefined;
 }
 
