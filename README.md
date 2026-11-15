@@ -9,22 +9,25 @@ SwiftServe is being built as a business-first local-services platform. The first
 ## Repository structure
 
 ```text
-apps/api/
-  src/app.js          # API routes and validation
-  src/server.js       # HTTP server
-  test/api.test.js    # automated API tests
-  openapi.yaml        # API specification
+app/                 # Android business MVP
+apps/api/            # Node.js service-request API
 docs/
   ARCHITECTURE.md
   ROADMAP.md
 ```
 
-## Requirements
+## Android MVP
+
+The Android app lets a business create requests, review its request list, accept or complete a job, and delete a request. It starts in **on-device mode**, saving requests on the phone. To use the API, enter its HTTPS base address in the app and tap **Save API address**. The app then uses the existing `/api/v1/jobs` endpoints.
+
+The API does not yet provide sign-in or durable storage. Use this MVP only with test data and a trusted development API.
+
+A debug APK is built by the **Android APK** GitHub Actions workflow. Open the workflow run and download the `SwiftServe-debug-apk` artifact.
+
+## API requirements and commands
 
 - Node.js 20 or later
 - npm
-
-## Run and test
 
 From the repository root:
 
@@ -46,17 +49,16 @@ The API defaults to `http://127.0.0.1:3000`. You can override the port with the 
 | PATCH | `/api/v1/jobs/:id` | Update a request |
 | DELETE | `/api/v1/jobs/:id` | Delete a request |
 
-## Phone-friendly test run
+## CI
 
-GitHub Actions is configured to run the API tests whenever code is pushed to `main` or a pull request targets `main`. Open the **Actions** tab in this repository and select **SwiftServe API CI** to see the latest result.
+GitHub Actions runs the API tests when code is pushed to `main` or a pull request targets `main`. The **Android APK** workflow builds and uploads the debug APK.
 
 ## Planned next steps
 
-1. Confirm automated tests pass.
-2. Replace in-memory storage with a persistent database.
-3. Add authentication and business-scoped authorization.
-4. Build business profiles, service listings, and booking workflows.
-5. Pilot with a small number of businesses before expanding to additional countries.
+1. Replace in-memory storage with a persistent database.
+2. Add authentication and business-scoped authorization.
+3. Build business profiles, service listings, and customer booking workflows.
+4. Pilot with a small number of businesses before expanding to additional countries.
 
 ## Security
 
