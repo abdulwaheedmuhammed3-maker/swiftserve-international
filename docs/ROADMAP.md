@@ -43,13 +43,20 @@ SwiftServe is being developed as an international household-services platform. T
 
 ## Stage 2 — Business operations
 
-- [ ] Add business profiles, branches and team membership management.
-- [ ] Add service catalogues, descriptions, pricing and service areas.
-- [ ] Add operating hours, availability and booking capacity.
-- [ ] Add job assignment and a complete booking status history.
-- [ ] Add search, filtering and pagination.
+- [x] Add business profile read/update endpoints.
+- [x] Add service catalogue create/list/read/update/delete endpoints with pricing validation.
+- [x] Add business branches with a primary-branch limit.
+- [x] Add weekly business/branch opening-hours endpoints.
+- [x] Add service coverage areas with business-owned branch references.
+- [x] Add team member listing, role changes and member removal.
+- [x] Add expiring team invitations, revocation and authenticated acceptance.
+- [x] Restrict workspace actions by business membership role.
+- [x] Add API regression tests for business profile, catalogue, branches, hours, coverage and invitations.
+- [x] Add PostgreSQL integration coverage for business resources and team invites.
+- [ ] Connect an email provider for invitation delivery.
 - [ ] Add business settings and multiple-business switching in Android.
-- [ ] Build business dashboard metrics and operational workflows.
+- [ ] Add catalogue search, pagination and operational analytics.
+- [ ] Add booking capacity, job assignment and full booking status history.
 
 **Exit condition:** a pilot business can onboard, publish its services and manage work without developer intervention.
 
