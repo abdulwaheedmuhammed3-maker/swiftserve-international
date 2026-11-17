@@ -671,8 +671,8 @@ async function handleAdminFinanceRoutes(req,url){
     if(record.accountStatus!=='active'||record.accountCurrency!==record.payout.currencyCode)return fail(409,'PAYOUT_ACCOUNT_MISMATCH','The provider payout account is inactive or uses a different currency.');
     if(record.payout.netAmountMinor<=0)return fail(409,'PAYOUT_AMOUNT_INVALID','The net payout amount must be positive.');
     const transferReference=record.payout.transferReference||'sspayout_'+payout[1].replaceAll('-','');
-    if(record.payout.status==='processing'){
-      if(!record.payout.transferReference)return fail(409,'PAYOUT_REFERENCE_MISSING','The processing payout has no transfer reference; manual reconciliation is required.');
+    if(['processing','failed'].includes(record.payout.status)&&record.payout.transferReference){
+      if(!record.payout.transferReference)return fail(409,'PAYOUT_REFERENCE_MISSING','The previous transfer has no reference; manual reconciliation is required.');
       const verification=await paystackRequest('/transfer/verify/'+encodeURIComponent(transferReference),null,'GET');
       if(!verification.ok)return fail(503,'PAYOUT_STATUS_UNAVAILABLE','The existing transfer status could not be verified. No second transfer was created.');
       const transferStatus=String(verification.data?.status||'').toLowerCase();
@@ -681,8 +681,14 @@ async function handleAdminFinanceRoutes(req,url){
         return ok(settled);
       }
       if(['failed','reversed','abandoned','blocked','rejected'].includes(transferStatus)){
-        const failed=await updatePayoutTransfer(payout[1],'failed',transferReference,verification.data?.transfer_code?String(verification.data.transfer_code):null,'Paystack transfer status: '+transferStatus);
-        return fail(409,'PAYOUT_TRANSFER_TERMINAL','The previous transfer reached a conclusive '+transferStatus+' status. Review it before retrying.',failed);
+        const terminal=transferStatus==='reversed'?'reversed':'failed';
+        const failed=await updatePayoutTransfer(payout[1],terminal,transferReference,verification.data?.transfer_code?String(verification.data.transfer_code):null,'Paystack transfer status: '+transferStatus);
+        await writeAdminAuditEvent({
+          action:'finance.payout.transfer_reconciled',targetType:'provider_payout',targetId:payout[1],
+          outcome:terminal==='reversed'?'failed':'succeeded',
+          details:{transferReference,providerStatus:transferStatus,localStatus:failed?.status||terminal}
+        });
+        return fail(409,'PAYOUT_TRANSFER_TERMINAL','The previous transfer reached a conclusive '+transferStatus+' status. It was not automatically retried; review the record before authorising another transfer.',failed);
       }
       return ok(record.payout,202);
     }
