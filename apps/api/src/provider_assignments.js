@@ -29,6 +29,11 @@ function mapAssignment(row){
   };
 }
 
+function publicMemoryAssignment(item){
+  const {bookingRef,...safe}=item;
+  return safe;
+}
+
 function localTime(timestamp,timeZone){
   const parts=new Intl.DateTimeFormat('en-GB',{
     timeZone,weekday:'short',year:'numeric',month:'2-digit',day:'2-digit',
@@ -140,7 +145,7 @@ export async function assignBookingToProvider(input){
   booking.status='assigned';
   booking.confirmedStartAt=scheduledStartAt;
   booking.confirmedEndAt=scheduledEndAt;
-  return {assignment};
+  return {assignment:publicMemoryAssignment(assignment)};
 }
 
 const assignmentSelect=
@@ -150,19 +155,20 @@ const assignmentSelect=
 export async function listBusinessAssignments(businessId,bookingId){
   const result=await queryDatabase(assignmentSelect+'WHERE a.business_id=$1 AND a.booking_id=$2 ORDER BY a.created_at DESC',[businessId,bookingId]);
   if(result)return result.rows.map(mapAssignment);
-  return [...assignments.values()].filter(item=>item.businessId===businessId&&item.bookingId===bookingId);
+  return [...assignments.values()].filter(item=>item.businessId===businessId&&item.bookingId===bookingId).map(publicMemoryAssignment);
 }
 
 export async function listProviderAssignments(providerUserId){
   const result=await queryDatabase(assignmentSelect+'WHERE a.provider_user_id=$1 ORDER BY a.scheduled_start_at DESC',[providerUserId]);
   if(result)return result.rows.map(mapAssignment);
-  return [...assignments.values()].filter(item=>item.providerUserId===providerUserId);
+  return [...assignments.values()].filter(item=>item.providerUserId===providerUserId).map(publicMemoryAssignment);
 }
 
 export async function getProviderAssignment(providerUserId,bookingId){
   const result=await queryDatabase(assignmentSelect+"WHERE a.provider_user_id=$1 AND a.booking_id=$2 AND a.status IN ('offered','accepted') ORDER BY a.created_at DESC LIMIT 1",[providerUserId,bookingId]);
   if(result)return result.rows[0]?mapAssignment(result.rows[0]):null;
-  return [...assignments.values()].find(item=>item.providerUserId===providerUserId&&item.bookingId===bookingId&&['offered','accepted'].includes(item.status))||null;
+  const item=[...assignments.values()].find(row=>row.providerUserId===providerUserId&&row.bookingId===bookingId&&['offered','accepted'].includes(row.status));
+  return item?publicMemoryAssignment(item):null;
 }
 
 export async function respondProviderAssignment(providerUserId,bookingId,action,note=null){
