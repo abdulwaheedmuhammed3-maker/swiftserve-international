@@ -112,7 +112,7 @@ A booking assignment has composite foreign keys to its booking and business-prov
 
 The assignment API verifies active business membership, provider verification/onboarding state, service skill, coverage area and weekly availability in the provider's configured time zone. This is not a full provider capacity engine: travel time, job buffers, business slot capacity, rescheduling and multi-day/overnight schedules are not implemented.
 
-Provider verification currently records a manual review decision. No identity-document file storage, biometric checks, background-check vendor or automated KYC integration is implemented. The admin review route uses the SWIFTSERVE_ADMIN_API_KEY secret as an initial administrative gate. Migration 007 records administrative actions under a configured non-secret key label; this labels a credential and does not identify the human using it. Individual admin accounts, roles, MFA and human-level attribution remain future work.
+Provider verification currently records a manual review decision. No identity-document file storage, biometric checks, background-check vendor or automated KYC integration is implemented. Migration 008 adds separate platform_admins and platform_admin_sessions tables. Administrators sign in individually with scrypt-hashed passwords and opaque revocable bearer sessions. The one-time SWIFTSERVE_ADMIN_BOOTSTRAP_KEY creates the first super administrator; subsequent admin accounts are managed by a super administrator. Roles are super_admin, finance_admin, support_admin and provider_reviewer. MFA/TOTP and automated account recovery are not yet implemented.
 
 Provider invitations store token hashes. As no outbound email provider is connected, the raw token is returned once to the business user for private sharing. Acceptance requires a signed-in provider account whose email matches the invitation.
 
@@ -146,7 +146,7 @@ Migration 007 adds:
 
 Migration 007 also adds the reversed status to provider_payouts and a last_reconciled_at timestamp. A verified transfer reversal is retained as reversed rather than flattened into failed. The reconciliation runner verifies pending payment intents and processing/failed transfers against Paystack. It can update a local payment or payout when provider evidence is conclusive. It never repeats a transfer or creates a refund. Pending refunds are marked for manual review and rely on signed refund webhooks for settlement updates.
 
-Admin audit records currently identify the configured SWIFTSERVE_ADMIN_ACTOR_ID credential label (default shared-admin-key). This is not a human identity. The API is still protected by a shared SWIFTSERVE_ADMIN_API_KEY rather than individual admin accounts and role-based authorization. Do not treat these audit rows as non-repudiable individual-user evidence.
+Migration 008 adds actor_admin_id to admin_audit_logs and finance_reconciliation_runs so newly authenticated admin actions can be attributed to a platform_admins row. Older migration 007 rows retain a null actor_admin_id because they were recorded before individual admin accounts existed. Account-level audit attribution does not itself provide MFA, device assurance or legal non-repudiation.
 
 ## Existing data and backfill
 
