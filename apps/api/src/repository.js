@@ -82,12 +82,19 @@ export async function checkDatabase() {
     "to_regclass('public.business_services') AS business_services, " +
     "to_regclass('public.business_hours') AS business_hours, " +
     "to_regclass('public.business_service_areas') AS business_service_areas, " +
-    "to_regclass('public.business_invitations') AS business_invitations"
+    "to_regclass('public.business_invitations') AS business_invitations, " +
+    "to_regclass('public.customer_profiles') AS customer_profiles, " +
+    "to_regclass('public.customer_locations') AS customer_locations, " +
+    "to_regclass('public.bookings') AS bookings, " +
+    "to_regclass('public.booking_quotes') AS booking_quotes, " +
+    "to_regclass('public.booking_status_events') AS booking_status_events, " +
+    "to_regclass('public.notifications') AS notifications"
   );
 
   const row = schema.rows[0] || {};
   const requiredTables = ['service_requests', 'users', 'businesses', 'business_memberships', 'sessions',
-    'business_branches', 'business_services', 'business_hours', 'business_service_areas', 'business_invitations'];
+    'business_branches', 'business_services', 'business_hours', 'business_service_areas', 'business_invitations',
+    'customer_profiles', 'customer_locations', 'bookings', 'booking_quotes', 'booking_status_events', 'notifications'];
   const missingTables = requiredTables.filter(name => !row[name]);
 
   if (missingTables.length) {
@@ -101,7 +108,8 @@ export async function checkDatabase() {
   const requiredMigrations = [
     '001_initial_schema.sql',
     '002_identity_business_scope.sql',
-    '003_business_operations.sql'
+    '003_business_operations.sql',
+    '004_customer_bookings.sql'
   ];
   const missingMigrations = requiredMigrations.filter(version => !applied.has(version));
 
@@ -435,6 +443,24 @@ export function resetStore() {
 export async function queryDatabase(text, values = []) {
   if (!pool) return null;
   return pool.query(text, values);
+}
+
+export async function listActiveBusinessSummaries() {
+  if (!pool) {
+    return [...memoryBusinesses.values()]
+      .filter(item => item.status === 'active')
+      .map(item => ({
+        id: item.id, name: item.name, countryCode: item.countryCode ?? null,
+        currencyCode: item.currencyCode ?? null, timeZone: item.timeZone ?? null
+      }));
+  }
+  const result = await pool.query(
+    "SELECT id,name,country_code,currency_code,time_zone FROM businesses WHERE status='active' ORDER BY name"
+  );
+  return result.rows.map(row => ({
+    id: row.id, name: row.name, countryCode: row.country_code,
+    currencyCode: row.currency_code, timeZone: row.time_zone
+  }));
 }
 
 export async function getBusinessSummary(businessId) {
