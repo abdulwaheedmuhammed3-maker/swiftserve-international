@@ -640,6 +640,15 @@ export async function recordProviderWebhookEvent(provider,eventKey,eventType,pay
   return true;
 }
 
+export async function deleteProviderWebhookEvent(provider,eventKey){
+  const result=await queryDatabase(
+    'DELETE FROM provider_webhook_events WHERE provider=$1 AND event_key=$2 RETURNING event_key',
+    [provider,eventKey]
+  );
+  if(result)return result.rowCount>0;
+  return webhookEvents.delete(provider+':'+eventKey);
+}
+
 export async function getCustomerDisputeById(userId,id){
   const result=await queryDatabase(
     'SELECT d.* FROM disputes d JOIN bookings b ON b.id=d.booking_id AND b.business_id=d.business_id WHERE b.customer_user_id=$1 AND d.id=$2',
