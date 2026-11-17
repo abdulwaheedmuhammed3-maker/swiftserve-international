@@ -1,8 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import {
+  authenticateAccessToken,
+  getAccountProfile,
+  loginAccount,
+  logoutAccessToken,
+  registerAccount
+} from './auth.js';
+import {
   checkDatabase,
   createJob,
   deleteJob,
+  getBusinessMembership,
   getJob,
   listJobs,
   resetStore,
@@ -15,7 +23,11 @@ const ALLOWED_SERVICES = new Set([
 ]);
 const ALLOWED_STATUSES = new Set(['pending', 'accepted', 'completed', 'cancelled']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const MAX_BODY_BYTES = 1024 * 1024;
+const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_RATE_LIMIT_MAX = Math.max(1, Number(process.env.AUTH_RATE_LIMIT_MAX || 10));
+const authAttempts = new Map();
 const STATUS_TRANSITIONS = {
   pending: new Set(['accepted', 'cancelled']),
   accepted: new Set(['completed', 'cancelled']),
@@ -43,6 +55,33 @@ function json(res, statusCode, body) {
 
 function errorResponse(code, message, details = []) {
   return { error: { code, message, details } };
+}
+
+function checkAuthRateLimit(req, res) {
+  const key = req.socket?.remoteAddress || 'unknown';
+  const now = Date.now();
+  let record = authAttempts.get(key);
+
+  if (!record || record.resetAt <= now) {
+    record = { count: 0, resetAt: now + AUTH_RATE_LIMIT_WINDOW_MS };
+  }
+
+  if (record.count >= AUTH_RATE_LIMIT_MAX) {
+    const retryAfter = Math.max(1, Math.ceil((record.resetAt - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    res.setHeader('Cache-Control', 'no-store');
+    return false;
+  }
+
+  record.count += 1;
+  authAttempts.set(key, record);
+
+  if (authAttempts.size > 10000) {
+    for (const [address, item] of authAttempts) {
+      if (item.resetAt <= now) authAttempts.delete(address);
+    }
+  }
+  return true;
 }
 
 function logSafeError(event, error) {
@@ -93,6 +132,68 @@ async function readJsonBody(req) {
   }
 }
 
+function validateRegistration(body) {
+  const details = [];
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return ['Request body must be a JSON object.'];
+  }
+
+  const allowed = new Set(['email', 'password', 'fullName', 'accountType', 'businessName', 'countryCode']);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) details.push('Unknown field: ' + key + '.');
+  }
+
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+  if (!email || email.length > 254 || !EMAIL_PATTERN.test(email)) {
+    details.push('email must be a valid email address no longer than 254 characters.');
+  }
+  if (typeof body.password !== 'string' || body.password.length < 12 || body.password.length > 128) {
+    details.push('password must contain between 12 and 128 characters.');
+  }
+  if (typeof body.fullName !== 'string' || body.fullName.trim().length < 2 || body.fullName.trim().length > 100) {
+    details.push('fullName must be between 2 and 100 characters.');
+  }
+
+  const accountType = body.accountType ?? 'customer';
+  if (!['customer', 'business'].includes(accountType)) {
+    details.push('accountType must be customer or business.');
+  }
+
+  if (accountType === 'business' &&
+      (typeof body.businessName !== 'string' ||
+       body.businessName.trim().length < 2 ||
+       body.businessName.trim().length > 120)) {
+    details.push('businessName must be between 2 and 120 characters for a business account.');
+  }
+  if (accountType === 'customer' && body.businessName !== undefined) {
+    details.push('businessName can only be supplied for a business account.');
+  }
+  if (body.countryCode !== undefined &&
+      (typeof body.countryCode !== 'string' || !/^[A-Za-z]{2}$/.test(body.countryCode))) {
+    details.push('countryCode must be a two-letter country code.');
+  }
+
+  return details;
+}
+
+function validateLogin(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return ['Request body must be a JSON object.'];
+  }
+  const details = [];
+  for (const key of Object.keys(body)) {
+    if (!['email', 'password'].includes(key)) details.push('Unknown field: ' + key + '.');
+  }
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+  if (!email || email.length > 254 || !EMAIL_PATTERN.test(email)) {
+    details.push('email must be a valid email address.');
+  }
+  if (typeof body.password !== 'string' || body.password.length < 1 || body.password.length > 128) {
+    details.push('password is required and must not exceed 128 characters.');
+  }
+  return details;
+}
+
 function validateCreate(body) {
   const details = [];
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -136,14 +237,47 @@ function validatePatch(body) {
   return details;
 }
 
-function parseRoute(urlPath) {
+function parseJobRoute(urlPath) {
   const match = urlPath.match(/^\/api\/v1\/jobs(?:\/([^/]+))?$/);
   return match ? match[1] ?? null : undefined;
+}
+
+function parseAuthRoute(urlPath) {
+  const match = urlPath.match(/^\/api\/v1\/auth\/(register|login|logout|me)$/);
+  return match ? match[1] : null;
 }
 
 function isAllowedStatusTransition(currentStatus, nextStatus) {
   return currentStatus === nextStatus ||
     Boolean(STATUS_TRANSITIONS[currentStatus]?.has(nextStatus));
+}
+
+function getBearerToken(req) {
+  const header = req.headers.authorization || '';
+  const match = header.match(/^Bearer ([A-Za-z0-9_-]{43})$/);
+  return match ? match[1] : null;
+}
+
+async function authenticateRequest(req) {
+  const token = getBearerToken(req);
+  if (!token) return null;
+  return authenticateAccessToken(token);
+}
+
+async function resolveBusinessContext(req, user) {
+  const businessId = req.headers['x-swiftserve-business-id'];
+  if (!businessId) {
+    return { error: errorResponse('BUSINESS_CONTEXT_REQUIRED', 'Set the X-SwiftServe-Business-Id header to an active business you belong to.'), status: 400 };
+  }
+  if (typeof businessId !== 'string' || !UUID_PATTERN.test(businessId)) {
+    return { error: errorResponse('INVALID_BUSINESS_ID', 'The business ID must be a valid UUID.'), status: 400 };
+  }
+
+  const membership = await getBusinessMembership(user.id, businessId);
+  if (!membership) {
+    return { error: errorResponse('BUSINESS_ACCESS_DENIED', 'You do not have active access to this business.'), status: 403 };
+  }
+  return { businessId, membership };
 }
 
 export async function requestHandler(req, res) {
@@ -179,7 +313,83 @@ export async function requestHandler(req, res) {
     }
   }
 
-  const id = parseRoute(url.pathname);
+  const authRoute = parseAuthRoute(url.pathname);
+  if (authRoute) {
+    if (['register', 'login'].includes(authRoute) && req.method === 'POST' &&
+        !checkAuthRateLimit(req, res)) {
+      return json(res, 429, errorResponse(
+        'AUTH_RATE_LIMITED',
+        'Too many sign-in or registration attempts. Try again later.'
+      ));
+    }
+
+    try {
+      if (authRoute === 'register') {
+        if (req.method !== 'POST') {
+          res.setHeader('Allow', 'POST');
+          return json(res, 405, errorResponse('METHOD_NOT_ALLOWED', 'HTTP method is not supported for this route.'));
+        }
+        const body = await readJsonBody(req);
+        const details = validateRegistration(body);
+        if (details.length) return json(res, 422, errorResponse('VALIDATION_ERROR', 'Registration validation failed.', details));
+
+        const data = await registerAccount({
+          email: body.email.trim().toLowerCase(),
+          password: body.password,
+          fullName: body.fullName.trim(),
+          accountType: body.accountType ?? 'customer',
+          businessName: typeof body.businessName === 'string' ? body.businessName.trim() : undefined,
+          countryCode: typeof body.countryCode === 'string' ? body.countryCode.toUpperCase() : undefined
+        });
+        return json(res, 201, { data });
+      }
+
+      if (authRoute === 'login') {
+        if (req.method !== 'POST') {
+          res.setHeader('Allow', 'POST');
+          return json(res, 405, errorResponse('METHOD_NOT_ALLOWED', 'HTTP method is not supported for this route.'));
+        }
+        const body = await readJsonBody(req);
+        const details = validateLogin(body);
+        if (details.length) return json(res, 422, errorResponse('VALIDATION_ERROR', 'Login validation failed.', details));
+
+        const data = await loginAccount(body.email.trim().toLowerCase(), body.password);
+        if (!data) return json(res, 401, errorResponse('INVALID_CREDENTIALS', 'Email or password is incorrect.'));
+        return json(res, 200, { data });
+      }
+
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) {
+        return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      }
+
+      if (authRoute === 'logout') {
+        if (req.method !== 'POST') {
+          res.setHeader('Allow', 'POST');
+          return json(res, 405, errorResponse('METHOD_NOT_ALLOWED', 'HTTP method is not supported for this route.'));
+        }
+        await logoutAccessToken(authenticated.tokenHash);
+        return json(res, 200, { data: { loggedOut: true } });
+      }
+
+      if (authRoute === 'me') {
+        if (req.method !== 'GET') {
+          res.setHeader('Allow', 'GET');
+          return json(res, 405, errorResponse('METHOD_NOT_ALLOWED', 'HTTP method is not supported for this route.'));
+        }
+        return json(res, 200, { data: await getAccountProfile(authenticated.user) });
+      }
+    } catch (error) {
+      if (error?.code === 'INVALID_JSON') return json(res, 400, errorResponse('INVALID_JSON', error.message));
+      if (error?.code === 'UNSUPPORTED_MEDIA_TYPE') return json(res, 415, errorResponse('UNSUPPORTED_MEDIA_TYPE', error.message));
+      if (error?.code === 'BODY_TOO_LARGE') return json(res, 413, errorResponse('BODY_TOO_LARGE', error.message));
+      if (error?.code === 'EMAIL_ALREADY_REGISTERED') return json(res, 409, errorResponse('EMAIL_ALREADY_REGISTERED', error.message));
+      logSafeError('authentication_request_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  const id = parseJobRoute(url.pathname);
   if (id === undefined) {
     return json(res, 404, errorResponse('NOT_FOUND', 'Route not found.'));
   }
@@ -194,6 +404,18 @@ export async function requestHandler(req, res) {
   }
 
   try {
+    const authenticated = await authenticateRequest(req);
+    if (!authenticated) {
+      return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+    }
+
+    const business = await resolveBusinessContext(req, authenticated.user);
+    if (business.error) return json(res, business.status, business.error);
+
+    if (req.method === 'DELETE' && !['owner', 'admin'].includes(business.membership.role)) {
+      return json(res, 403, errorResponse('INSUFFICIENT_ROLE', 'Only business owners and administrators can delete service requests.'));
+    }
+
     if (req.method === 'GET' && id === null) {
       const status = url.searchParams.get('status');
       if (status && !ALLOWED_STATUSES.has(status)) {
@@ -201,7 +423,7 @@ export async function requestHandler(req, res) {
           'status must be one of: ' + [...ALLOWED_STATUSES].join(', ') + '.'
         ]));
       }
-      const items = await listJobs(status);
+      const items = await listJobs(status, business.businessId);
       return json(res, 200, { data: items, count: items.length });
     }
 
@@ -222,10 +444,12 @@ export async function requestHandler(req, res) {
         createdAt: now,
         updatedAt: now
       };
-      return json(res, 201, { data: await createJob(job) });
+      return json(res, 201, {
+        data: await createJob(job, business.businessId, authenticated.user.id)
+      });
     }
 
-    const current = await getJob(id);
+    const current = await getJob(id, business.businessId);
     if (!current) {
       return json(res, 404, errorResponse('JOB_NOT_FOUND', 'No service request exists with that ID.'));
     }
@@ -252,9 +476,9 @@ export async function requestHandler(req, res) {
         ...(typeof body.description === 'string' ? { description: body.description.trim() } : {}),
         ...(typeof body.area === 'string' ? { area: body.area.trim() } : {})
       };
-      const updated = await updateJob(id, patch, current.status);
+      const updated = await updateJob(id, patch, current.status, business.businessId);
       if (!updated) {
-        const latest = await getJob(id);
+        const latest = await getJob(id, business.businessId);
         if (!latest) {
           return json(res, 404, errorResponse('JOB_NOT_FOUND', 'The service request no longer exists.'));
         }
@@ -267,7 +491,7 @@ export async function requestHandler(req, res) {
     }
 
     if (req.method === 'DELETE') {
-      const deleted = await deleteJob(id);
+      const deleted = await deleteJob(id, business.businessId);
       if (!deleted) {
         return json(res, 404, errorResponse('JOB_NOT_FOUND', 'The service request no longer exists.'));
       }
@@ -275,15 +499,9 @@ export async function requestHandler(req, res) {
       return res.end();
     }
   } catch (error) {
-    if (error?.code === 'INVALID_JSON') {
-      return json(res, 400, errorResponse('INVALID_JSON', error.message));
-    }
-    if (error?.code === 'UNSUPPORTED_MEDIA_TYPE') {
-      return json(res, 415, errorResponse('UNSUPPORTED_MEDIA_TYPE', error.message));
-    }
-    if (error?.code === 'BODY_TOO_LARGE') {
-      return json(res, 413, errorResponse('BODY_TOO_LARGE', error.message));
-    }
+    if (error?.code === 'INVALID_JSON') return json(res, 400, errorResponse('INVALID_JSON', error.message));
+    if (error?.code === 'UNSUPPORTED_MEDIA_TYPE') return json(res, 415, errorResponse('UNSUPPORTED_MEDIA_TYPE', error.message));
+    if (error?.code === 'BODY_TOO_LARGE') return json(res, 413, errorResponse('BODY_TOO_LARGE', error.message));
     logSafeError('request_failed', error);
     return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
   }
