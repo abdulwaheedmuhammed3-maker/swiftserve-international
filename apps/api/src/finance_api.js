@@ -9,7 +9,7 @@ import {
   createBookingReview, listBusinessReviews, listProviderReviews,
   createDispute, getCustomerDispute, getCustomerDisputeById, getBusinessDispute, addDisputeMessage,
   listDisputeMessages, listAdminDisputes, listBusinessDisputes, resolveDispute,
-  getBookingFinancialSummary, recordProviderWebhookEvent, listCustomerPayments, listProviderReviews
+  getBookingFinancialSummary, recordProviderWebhookEvent
 } from './finance_resources.js';
 import { getCustomerBooking, getBusinessBooking } from './marketplace_resources.js';
 import { getCompletedAssignmentForBooking } from './provider_assignments.js';
