@@ -1119,11 +1119,22 @@ test('booking requests reject expired times and service areas outside a business
 
 
 test('provider onboarding, verification, invitation, assignment and job completion work end to end', async () => {
-  const previousAdminKey=process.env.SWIFTSERVE_ADMIN_API_KEY;
-  process.env.SWIFTSERVE_ADMIN_API_KEY='swiftserve-test-admin-key';
+  const previousBootstrapKey=process.env.SWIFTSERVE_ADMIN_BOOTSTRAP_KEY;
+  process.env.SWIFTSERVE_ADMIN_BOOTSTRAP_KEY='swiftserve-test-bootstrap-key';
   const server=await startTestServer();
   try {
     const base='http://127.0.0.1:'+server.address().port;
+    const bootstrap=await request(base,'/api/v1/admin/auth/bootstrap',{
+      method:'POST',
+      headers:{'X-SwiftServe-Admin-Bootstrap-Key':'swiftserve-test-bootstrap-key'},
+      body:JSON.stringify({
+        email:'platform-admin@example.test',
+        password:'PlatformAdmin#Strong123',
+        fullName:'Platform Super Admin'
+      })
+    });
+    assert.equal(bootstrap.status,201);
+    const adminHeaders={Authorization:'Bearer '+bootstrap.body.data.accessToken};
     const owner=await registerBusiness(base,'provider-business@example.com','Provider Test Business');
 
     const branch=await request(base,'/api/v1/business/branches',{
@@ -1263,7 +1274,7 @@ test('provider onboarding, verification, invitation, assignment and job completi
 
     const review=await request(base,'/api/v1/admin/providers/'+provider.user.id+'/verification',{
       method:'PATCH',
-      headers:{'X-SwiftServe-Admin-Key':'swiftserve-test-admin-key'},
+      headers:adminHeaders,
       body:JSON.stringify({status:'verified',note:'Provider identity and credentials reviewed.'})
     });
     assert.equal(review.status,200);
@@ -1345,8 +1356,8 @@ test('provider onboarding, verification, invitation, assignment and job completi
     assert.equal(finalBooking.body.data.status,'completed');
   } finally {
     await stopTestServer(server);
-    if(previousAdminKey===undefined)delete process.env.SWIFTSERVE_ADMIN_API_KEY;
-    else process.env.SWIFTSERVE_ADMIN_API_KEY=previousAdminKey;
+    if(previousBootstrapKey===undefined)delete process.env.SWIFTSERVE_ADMIN_BOOTSTRAP_KEY;
+    else process.env.SWIFTSERVE_ADMIN_BOOTSTRAP_KEY=previousBootstrapKey;
   }
 });
 
@@ -1380,7 +1391,7 @@ test('payment endpoints fail closed without gateway configuration and reject uns
   }
 });
 
-test('admin audit and reconciliation endpoints require the platform admin key', async () => {
+test('admin audit and reconciliation endpoints require an authenticated platform administrator', async () => {
   const server=await startTestServer();
   try {
     const base='http://127.0.0.1:'+server.address().port;
