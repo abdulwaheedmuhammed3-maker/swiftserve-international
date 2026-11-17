@@ -214,7 +214,12 @@ public final class MainActivity extends Activity {
 
         String path = createAccount ? "/api/v1/auth/register" : "/api/v1/auth/login";
         perform(() -> api("POST", path, payload), result -> {
-            JSONObject data = result.optJSONObject("data");
+            if (!(result instanceof JSONObject)) {
+                toast("The API returned an unexpected account response.");
+                return;
+            }
+            JSONObject response = (JSONObject) result;
+            JSONObject data = response.optJSONObject("data");
             JSONArray businesses = data == null ? null : data.optJSONArray("businesses");
             JSONObject firstBusiness = businesses == null || businesses.length() == 0
                     ? null : businesses.optJSONObject(0);
