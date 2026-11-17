@@ -15,7 +15,7 @@ SwiftServe is being developed as an international household-services platform. T
 - [x] Verify GitHub Actions API tests and Android APK build on the stabilisation pull request.
 - [ ] Apply database migrations to the development database.
 - [x] Add a checksum-verified migration runner and PostgreSQL 16 integration tests in CI.
-- [ ] Apply migrations 001–005 to the actual development database and verify data survives API restarts.
+- [ ] Apply migrations 001–006 to the actual development database and verify data survives API restarts.
 - [ ] Verify the deployed API configuration and readiness behaviour.
 
 **Exit condition:** the actual development database is migrated, automated checks pass, PostgreSQL persistence is verified, and deployment does not use volatile storage.
@@ -34,7 +34,7 @@ SwiftServe is being developed as an international household-services platform. T
 - [x] Add process-local throttling for registration and login attempts.
 - [x] Add tests for account lifecycle, authentication and cross-business access.
 - [x] Add PostgreSQL integration coverage for account persistence, session revocation and cross-business isolation in CI.
-- [ ] Apply migrations 002–005 to the actual development database and verify the deployed service.
+- [ ] Apply migrations 002–006 to the actual development database and verify the deployed service.
 - [ ] Add email verification, password reset, account recovery and administrative session revocation.
 - [ ] Move rate limiting to a shared gateway/store before horizontal scaling.
 - [ ] Review security, privacy and session policies for the first pilot.
@@ -57,7 +57,8 @@ SwiftServe is being developed as an international household-services platform. T
 - [ ] Add business settings and multiple-business switching in Android.
 - [ ] Add catalogue search, pagination and operational analytics.
 - [x] Add booking status history and customer/business status views.
-- [ ] Add booking capacity, slot-conflict checks and provider job assignment.
+- [x] Add provider job assignment and provider-controlled work progression.
+- [ ] Add booking capacity, business slot-conflict checks, travel buffers and rescheduling.
 
 **Exit condition:** a pilot business can onboard, publish its services and manage work without developer intervention.
 
@@ -92,11 +93,21 @@ SwiftServe is being developed as an international household-services platform. T
 
 - [x] Add a protected manual provider verification review workflow.
 - [ ] Add provider identity evidence/document storage and stronger KYC review controls.
-- [ ] Integrate country-appropriate payment providers.
-- [ ] Add payment intents, transaction records, refunds and reconciliation.
-- [ ] Add reviews, ratings, reports and dispute handling.
-- [ ] Add support tools, audit trails and operational monitoring.
-- [ ] Test payment failures, retries, refunds and webhook idempotency.
+- [x] Add provider-agnostic hosted checkout adapters for Paystack and Flutterwave.
+- [x] Add customer-owned payment intents with idempotency keys and immutable booking amount/currency validation.
+- [x] Add server-to-server transaction verification before marking a booking paid.
+- [x] Add signed webhook validation, replay protection and retryable processing for transient verification failures.
+- [x] Add payment transaction, allocation, refund-request, payout-record and webhook-event schema.
+- [x] Add completed-booking reviews and business responses.
+- [x] Add customer/business dispute workflows, participant messages and protected admin resolution.
+- [x] Add API and PostgreSQL integration tests for disabled payments, signature rejection, reviews and disputes.
+- [ ] Configure real merchant accounts and run gateway test-mode initialization/verification in each launch market.
+- [ ] Implement actual refund submission, webhook processing and reconciliation.
+- [ ] Implement provider/business payout accounts, transfer submission, settlement and reconciliation.
+- [ ] Define platform fee, tax, provider commission and business/provider settlement-split rules.
+- [ ] Replace shared admin API key with administrator accounts, roles and actor-attributed audit logs.
+- [ ] Add support tools, evidence attachments, moderation and operational monitoring.
+- [ ] Complete privacy, consumer-protection, payment compliance and incident-response review.
 
 **Exit condition:** the platform can safely support a real pilot with clear financial and dispute records.
 
