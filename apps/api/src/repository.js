@@ -96,7 +96,17 @@ export async function checkDatabase() {
     "to_regclass('public.business_provider_memberships') AS business_provider_memberships, " +
     "to_regclass('public.provider_invitations') AS provider_invitations, " +
     "to_regclass('public.booking_assignments') AS booking_assignments, " +
-    "to_regclass('public.provider_status_events') AS provider_status_events"
+    "to_regclass('public.provider_status_events') AS provider_status_events, " +
+    "to_regclass('public.payment_intents') AS payment_intents, " +
+    "to_regclass('public.payment_transactions') AS payment_transactions, " +
+    "to_regclass('public.payment_allocations') AS payment_allocations, " +
+    "to_regclass('public.refunds') AS refunds, " +
+    "to_regclass('public.payouts') AS payouts, " +
+    "to_regclass('public.payment_webhook_events') AS payment_webhook_events, " +
+    "to_regclass('public.service_reviews') AS service_reviews, " +
+    "to_regclass('public.service_review_responses') AS service_review_responses, " +
+    "to_regclass('public.service_disputes') AS service_disputes, " +
+    "to_regclass('public.service_dispute_messages') AS service_dispute_messages"
   );
 
   const row = schema.rows[0] || {};
@@ -104,7 +114,9 @@ export async function checkDatabase() {
     'business_branches', 'business_services', 'business_hours', 'business_service_areas', 'business_invitations',
     'customer_profiles', 'customer_locations', 'bookings', 'booking_quotes', 'booking_status_events', 'notifications',
     'provider_profiles', 'provider_skills', 'provider_service_areas', 'provider_availability',
-    'business_provider_memberships', 'provider_invitations', 'booking_assignments', 'provider_status_events'];
+    'business_provider_memberships', 'provider_invitations', 'booking_assignments', 'provider_status_events',
+    'payment_intents', 'payment_transactions', 'payment_allocations', 'refunds', 'payouts',
+    'payment_webhook_events', 'service_reviews', 'service_review_responses', 'service_disputes', 'service_dispute_messages'];
   const missingTables = requiredTables.filter(name => !row[name]);
 
   if (missingTables.length) {
@@ -120,7 +132,8 @@ export async function checkDatabase() {
     '002_identity_business_scope.sql',
     '003_business_operations.sql',
     '004_customer_bookings.sql',
-    '005_provider_operations.sql'
+    '005_provider_operations.sql',
+    '006_payments_trust.sql'
   ];
   const missingMigrations = requiredMigrations.filter(version => !applied.has(version));
 
