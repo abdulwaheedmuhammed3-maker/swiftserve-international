@@ -138,6 +138,9 @@ export async function getBranch(businessId,id) {
 
 export async function createBranch(businessId,input) {
   const item={id:randomUUID(),businessId,...input,status:'active'};
+  if (item.isPrimary) {
+    await queryDatabase('UPDATE business_branches SET is_primary=false,updated_at=now() WHERE business_id=$1',[businessId]);
+  }
   const result=await queryDatabase(
     'INSERT INTO business_branches (id,business_id,name,country_code,address_line1,address_line2,city,region,postal_code,phone_e164,time_zone,is_primary,status) '+
     'VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *',
