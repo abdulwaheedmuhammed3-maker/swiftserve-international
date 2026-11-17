@@ -33,6 +33,7 @@ function mapBooking(row) {
     serviceCategory:row.service_category_snapshot, pricingModel:row.pricing_model_snapshot,
     currencyCode:row.currency_code,
     servicePriceMinor:row.service_price_minor_snapshot===null?null:Number(row.service_price_minor_snapshot),
+    serviceDurationMinutes:row.service_duration_minutes_snapshot??null,
     serviceAddress:{
       recipientName:row.service_address_recipient, phoneE164:row.service_address_phone,
       countryCode:row.service_country_code, addressLine1:row.service_address_line1,
@@ -283,8 +284,8 @@ export async function createCustomerBooking(userId,input,service,location) {
   const address=location||input.serviceAddress;
   const result=await withDatabaseTransaction(async client=>{
     const inserted=await client.query(
-      "INSERT INTO bookings (id,public_reference,business_id,service_id,branch_id,customer_user_id,customer_location_id,service_name_snapshot,service_category_snapshot,pricing_model_snapshot,currency_code,service_price_minor_snapshot,service_address_recipient,service_address_phone,service_country_code,service_address_line1,service_address_line2,service_city,service_region,service_postal_code,requested_start_at,requested_end_at,customer_notes,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'requested') RETURNING *",
-      [id,reference,input.businessId,service.id,input.branchId??null,userId,location?.id??null,service.name,service.category,service.pricingModel,service.currencyCode,service.priceMinor??null,address.recipientName,address.phoneE164??null,address.countryCode,address.addressLine1,address.addressLine2??null,address.city,address.region??null,address.postalCode??null,input.requestedStartAt,input.requestedEndAt??null,input.customerNotes??null]
+      "INSERT INTO bookings (id,public_reference,business_id,service_id,branch_id,customer_user_id,customer_location_id,service_name_snapshot,service_category_snapshot,pricing_model_snapshot,currency_code,service_price_minor_snapshot,service_duration_minutes_snapshot,service_address_recipient,service_address_phone,service_country_code,service_address_line1,service_address_line2,service_city,service_region,service_postal_code,requested_start_at,requested_end_at,customer_notes,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'requested') RETURNING *",
+      [id,reference,input.businessId,service.id,input.branchId??null,userId,location?.id??null,service.name,service.category,service.pricingModel,service.currencyCode,service.priceMinor??null,service.durationMinutes??null,address.recipientName,address.phoneE164??null,address.countryCode,address.addressLine1,address.addressLine2??null,address.city,address.region??null,address.postalCode??null,input.requestedStartAt,input.requestedEndAt??null,input.customerNotes??null]
     );
     await client.query("INSERT INTO booking_status_events (business_id,booking_id,from_status,to_status,actor_user_id,note) VALUES ($1,$2,$3,$4,$5,$6)",[input.businessId,id,null,'requested',userId,'Customer submitted a booking request.']);
     await client.query("INSERT INTO notifications (user_id,notification_type,title,body,resource_type,resource_id) SELECT bm.user_id,'booking_requested','New booking request','A customer has requested ' || $2 || '.','booking',$1 FROM business_memberships bm WHERE bm.business_id=$3 AND bm.status='active'",[id,service.name,input.businessId]);
@@ -296,6 +297,7 @@ export async function createCustomerBooking(userId,input,service,location) {
     customerUserId:userId,customerLocationId:location?.id??null,serviceName:service.name,
     serviceCategory:service.category,pricingModel:service.pricingModel,currencyCode:service.currencyCode,
     servicePriceMinor:service.priceMinor??null,
+    serviceDurationMinutes:service.durationMinutes??null,
     serviceAddress:{
       recipientName:address.recipientName,
       phoneE164:address.phoneE164??null,
