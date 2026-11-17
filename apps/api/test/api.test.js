@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { requestHandler, resetStore } from '../src/app.js';
+
+// Always use isolated in-memory storage, even when a developer has DATABASE_URL in .env.
+process.env.NODE_ENV = 'test';
+const { requestHandler, resetStore } = await import('../src/app.js');
 
 function startTestServer() {
   return new Promise(resolve => {
