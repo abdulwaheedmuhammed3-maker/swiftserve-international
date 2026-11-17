@@ -63,6 +63,7 @@ async function readJsonBody(req) {
 
   const declaredLength = Number(req.headers['content-length'] || 0);
   if (declaredLength > MAX_BODY_BYTES) {
+    req.resume();
     const err = new Error('Request body exceeds 1 MB.');
     err.code = 'BODY_TOO_LARGE';
     throw err;
