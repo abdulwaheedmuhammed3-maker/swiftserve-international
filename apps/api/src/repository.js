@@ -440,6 +440,22 @@ export function resetStore() {
   memorySessions.clear();
 }
 
+export async function withDatabaseTransaction(operation) {
+  if (!pool) return null;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await operation(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function queryDatabase(text, values = []) {
   if (!pool) return null;
   return pool.query(text, values);
