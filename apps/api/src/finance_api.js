@@ -9,7 +9,7 @@ import {
   createBookingReview, listBusinessReviews, listProviderReviews,
   createDispute, getCustomerDispute, getCustomerDisputeById, getBusinessDispute, addDisputeMessage,
   listDisputeMessages, listAdminDisputes, listBusinessDisputes, resolveDispute,
-  getBookingFinancialSummary, recordProviderWebhookEvent, hasProviderWebhookEvent
+  getBookingFinancialSummary, recordProviderWebhookEvent, deleteProviderWebhookEvent
 } from './finance_resources.js';
 import { getCustomerBooking, getBusinessBooking } from './marketplace_resources.js';
 import { getCompletedAssignmentForBooking } from './provider_assignments.js';
@@ -150,7 +150,6 @@ function verifyPaystackSignature(rawBody,headers){
 }
 
 async function startCustomerPayment(req,url,user){
-  if(!process.env.PAYSTACK_SECRET_KEY)return fail(503,'PAYMENT_GATEWAY_NOT_CONFIGURED','Online payments are not enabled. Configure PAYSTACK_SECRET_KEY on the server first.');
   const match=url.pathname.match(/^\/api\/v1\/customer\/bookings\/([^/]+)\/payments$/);
   if(!match||!validId(match[1]))return fail(400,'INVALID_ID','Booking ID must be a valid UUID.');
   if(req.method==='GET'){
@@ -159,6 +158,7 @@ async function startCustomerPayment(req,url,user){
     return ok(await listCustomerPayments(user.id,booking.id));
   }
   if(req.method!=='POST')return method(['GET','POST']);
+  if(!process.env.PAYSTACK_SECRET_KEY)return fail(503,'PAYMENT_GATEWAY_NOT_CONFIGURED','Online payments are not enabled. Configure PAYSTACK_SECRET_KEY on the server first.');
   const idempotencyKey=req.headers['idempotency-key'];
   if(typeof idempotencyKey!=='string'||idempotencyKey.trim().length<8||idempotencyKey.length>120)
     return fail(400,'IDEMPOTENCY_KEY_REQUIRED','Provide an Idempotency-Key header containing 8–120 characters.');
@@ -215,16 +215,16 @@ async function verifyCustomerPayment(req,url,user){
     const verified=await markPaymentSucceeded(payment.reference,data,eventKey,'transaction.verify',payloadHash);
     if(verified.missing)return fail(404,'PAYMENT_NOT_FOUND','Payment not found.');
     if(verified.mismatch)return fail(409,'PAYMENT_MISMATCH','The gateway amount, currency or reference does not match the booking.');
-    if(verified.changed){
-      const assignment=await getCompletedAssignmentForBooking(payment.bookingId);
-      if(assignment)await createOrRefreshPayoutForCompletedAssignment(payment.bookingId,assignment);
-    }
+    const assignment=await getCompletedAssignmentForBooking(payment.bookingId);
+    if(assignment)await createOrRefreshPayoutForCompletedAssignment(payment.bookingId,assignment);
     return ok(verified.payment);
   }
-  const eventKey=createHash('sha256').update('verify|'+payment.reference+'|'+String(data.status||'unknown')).digest('hex');
+  const gatewayStatus=String(data.status||'').toLowerCase();
+  if(!['failed','abandoned'].includes(gatewayStatus))return ok(payment,202);
+  const eventKey=createHash('sha256').update('verify|'+payment.reference+'|'+gatewayStatus).digest('hex');
   const payloadHash=createHash('sha256').update(JSON.stringify(data)).digest('hex');
-  const failed=await markPaymentFailed(payment.reference,data.gateway_response||data.status||'Payment was not successful.',eventKey,'transaction.verify',payloadHash);
-  return fail(409,'PAYMENT_NOT_SUCCESSFUL',data.gateway_response||'The gateway has not confirmed a successful payment.',failed);
+  const failed=await markPaymentFailed(payment.reference,data.gateway_response||gatewayStatus||'Payment was not successful.',eventKey,'transaction.verify',payloadHash);
+  return fail(409,'PAYMENT_NOT_SUCCESSFUL',data.gateway_response||'The payment was not successful.',failed);
 }
 
 async function startBusinessRefund(req,url,user,business){
@@ -456,6 +456,21 @@ async function handleAdminFinanceRoutes(req,url){
     if(record.accountStatus!=='active'||record.accountCurrency!==record.payout.currencyCode)return fail(409,'PAYOUT_ACCOUNT_MISMATCH','The provider payout account is inactive or uses a different currency.');
     if(record.payout.netAmountMinor<=0)return fail(409,'PAYOUT_AMOUNT_INVALID','The net payout amount must be positive.');
     const transferReference=record.payout.transferReference||'sspayout_'+payout[1].replaceAll('-','');
+    if(record.payout.status==='processing'){
+      if(!record.payout.transferReference)return fail(409,'PAYOUT_REFERENCE_MISSING','The processing payout has no transfer reference; manual reconciliation is required.');
+      const verification=await paystackRequest('/transfer/verify/'+encodeURIComponent(transferReference),null,'GET');
+      if(!verification.ok)return fail(503,'PAYOUT_STATUS_UNAVAILABLE','The existing transfer status could not be verified. No second transfer was created.');
+      const transferStatus=String(verification.data?.status||'').toLowerCase();
+      if(transferStatus==='success'){
+        const settled=await updatePayoutTransfer(payout[1],'paid',transferReference,verification.data?.transfer_code?String(verification.data.transfer_code):null,null);
+        return ok(settled);
+      }
+      if(['failed','reversed','abandoned','blocked','rejected'].includes(transferStatus)){
+        const failed=await updatePayoutTransfer(payout[1],'failed',transferReference,verification.data?.transfer_code?String(verification.data.transfer_code):null,'Paystack transfer status: '+transferStatus);
+        return fail(409,'PAYOUT_TRANSFER_TERMINAL','The previous transfer reached a conclusive '+transferStatus+' status. Review it before retrying.',failed);
+      }
+      return ok(record.payout,202);
+    }
     const pending=await updatePayoutTransfer(payout[1],'processing',transferReference,null,null);
     const gateway=await paystackRequest('/transfer',{
       source:'balance',amount:record.payout.netAmountMinor,
@@ -552,24 +567,32 @@ export async function handlePaystackWebhook(rawBody,headers){
   const data=event.data;
   const payloadHash=createHash('sha256').update(rawBody).digest('hex');
   const eventKey=createHash('sha256').update(eventType+'|'+String(data.reference||data.id||'')+'|'+payloadHash).digest('hex');
-  if(await hasProviderWebhookEvent('paystack',eventKey))
-    return {status:200,body:{received:true,duplicate:true}};
+  const claimed=await recordProviderWebhookEvent('paystack',eventKey,eventType,payloadHash);
+  if(!claimed)return {status:200,body:{received:true,duplicate:true}};
 
+  try{
   if(eventType==='charge.success'){
-    if(!process.env.PAYSTACK_SECRET_KEY)return {status:503,body:{error:'Payment verification is temporarily unavailable.'}};
+    if(!process.env.PAYSTACK_SECRET_KEY){
+      await deleteProviderWebhookEvent('paystack',eventKey);
+      return {status:503,body:{error:'Payment verification is temporarily unavailable.'}};
+    }
     const reference=String(data.reference||'');
     const payment=await getPaymentByReference(reference);
     if(payment){
       const gateway=await paystackRequest('/transaction/verify/'+encodeURIComponent(reference),null,'GET');
-      if(!gateway.ok)return {status:503,body:{error:'Payment verification is temporarily unavailable.'}};
+      if(!gateway.ok){
+        await deleteProviderWebhookEvent('paystack',eventKey);
+        return {status:503,body:{error:'Payment verification is temporarily unavailable.'}};
+      }
       const verified=gateway.data||{};
       const outcome=await markPaymentSucceeded(reference,verified,eventKey,eventType,payloadHash);
-      if(outcome.mismatch)return {status:409,body:{error:'Payment verification values do not match.'}};
-      if(outcome.missing)return {status:200,body:{received:true,ignored:true}};
-      if(outcome.changed){
-        const assignment=await getCompletedAssignmentForBooking(outcome.payment.bookingId);
-        if(assignment)await createOrRefreshPayoutForCompletedAssignment(outcome.payment.bookingId,assignment);
+      if(outcome.mismatch){
+        await deleteProviderWebhookEvent('paystack',eventKey);
+        return {status:409,body:{error:'Payment verification values do not match.'}};
       }
+      if(outcome.missing)return {status:200,body:{received:true,ignored:true}};
+      const assignment=await getCompletedAssignmentForBooking(outcome.payment.bookingId);
+      if(assignment)await createOrRefreshPayoutForCompletedAssignment(outcome.payment.bookingId,assignment);
     }
   }else if(eventType==='charge.failed'){
     const reference=String(data.reference||'');
@@ -588,6 +611,9 @@ export async function handlePaystackWebhook(rawBody,headers){
     const reference=String(data.reference||'');
     if(reference)await updatePayoutByTransferReference(reference,eventType==='transfer.success'?'paid':'failed',data.id?String(data.id):null);
   }
-  await recordProviderWebhookEvent('paystack',eventKey,eventType,payloadHash);
   return {status:200,body:{received:true}};
+  }catch(error){
+    await deleteProviderWebhookEvent('paystack',eventKey);
+    throw error;
+  }
 }
