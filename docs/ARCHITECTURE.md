@@ -35,21 +35,27 @@ The Android application is currently a limited business workspace. The backend i
 - Customer profiles and private saved service locations.
 - Tenant-scoped booking requests, immutable address/price snapshots, quote history and status events.
 - In-app notifications for new bookings, quotes, quote responses, status changes and cancellations.
-- Checksum-verified migrations 001–004 and PostgreSQL 16 CI integration tests.
+- Checksum-verified migrations 001–005 and PostgreSQL 16 CI integration tests.
+- Provider account registration and provider profiles with service skills, service areas and weekly availability.
+- Manual provider verification request/review workflow protected by a server-side admin API key.
+- Business-provider invitation and membership workflow.
+- Booking assignment offers with provider acceptance/decline, availability and overlap checks, and provider progress/completion updates.
 - API regression tests and GitHub Actions workflows for API CI and debug APK builds.
 
 ## Known limitations
 
 - No email verification, password reset, MFA or account recovery.
 - Session refresh and administrative session revocation are not implemented; bearer sessions expire after seven days.
-- The current registration route allows public business and customer account creation; abuse controls must be reviewed before public launch.
+- Public registration supports customer, business and provider account types; registration abuse controls must be reviewed before public launch.
+- Provider verification is a manual review flag; identity-document upload, storage and automated checks are not implemented.
 - Authentication throttling is process-local and should move to a shared gateway/store before horizontal scaling.
 - Legacy service requests created before business ownership was added are intentionally unassigned and hidden from business-scoped routes until a reviewed backfill is performed.
 - The Android app selects the first returned business; multi-business switching, team invitations and role-based screens are not implemented.
 - The Android app still provides the business service-request MVP; customer marketplace and booking screens are not implemented.
-- No provider onboarding, availability, assignment or provider app yet.
-- No automatic email delivery for team invitations or customer booking communications; only in-app notifications are stored.
-- No slot capacity/availability conflict engine, payments, provider verification, reviews, disputes or refunds yet.
+- Provider onboarding and assignment exist in the API, but there is no dedicated provider or customer mobile app.
+- Provider and business invitation tokens are returned once for private out-of-band sharing; no email delivery provider is configured.
+- Assignment checks provider schedule overlaps, but there is no full business slot-capacity/booking conflict engine or rescheduling flow.
+- No payment collection, provider payouts, reviews, disputes or refunds yet.
 
 ## Identity and authorization model
 
@@ -78,6 +84,18 @@ The business identifier supplied by the client is only a selection hint. It is n
 8. **Payments and finance:** payment intents, provider payouts, refunds, fees, settlement and reconciliation through country-specific adapters.
 9. **Trust and safety:** reviews, reports, disputes, moderation, audit events and support workflows.
 10. **Administration and analytics:** market operations, platform configuration, service quality, revenue and operational reporting.
+
+## Provider operations model
+
+Provider accounts use the provider account type and have a provider_profiles record. Providers maintain service skills, coverage areas and weekly availability. A provider must complete those sections and submit their profile for review before the manual verification state can be approved.
+
+The current manual review API is protected by the SWIFTSERVE_ADMIN_API_KEY runtime secret. The key is supplied through an admin header and is never stored in the repository or mobile apps. This is an initial admin gate, not a full platform-admin identity/role system. Provider identity documents are not uploaded or stored in this phase, so the verified status is an explicit operational review decision rather than automated KYC.
+
+Businesses can invite provider accounts by email. The invitation token is stored as a hash and is returned once to the authorized business user because automated email delivery is not configured. The invited provider must accept while signed in with the invited email. Acceptance creates a business-provider membership.
+
+A booking can be offered to a provider only when its business membership is active, the provider is verified and active, the required service skill matches, the booking address is covered, and the scheduled period fits the provider's weekly availability in their configured time zone. Overlapping offered/accepted assignments are rejected. The provider can accept or decline an offer and, after accepting, move the booking to in_progress and completed. Business users can cancel an active assignment.
+
+Provider and booking status transitions are recorded in booking_status_events, provider_status_events and assignment records. Notifications are stored in-app; push, SMS and email delivery adapters are not connected yet.
 
 ## Customer marketplace and booking model
 
