@@ -4,6 +4,7 @@ import http from 'node:http';
 
 // Tests always use isolated in-memory repositories, regardless of local .env settings.
 process.env.NODE_ENV = 'test';
+process.env.AUTH_RATE_LIMIT_MAX = '1000';
 const { requestHandler, resetStore } = await import('../src/app.js');
 
 function startTestServer() {
