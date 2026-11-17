@@ -436,8 +436,8 @@ export async function updateBusinessBookingStatus(businessId,bookingId,actorId,n
   const allowed={
     requested:['confirmed','declined','cancelled'],
     quoted:['confirmed','declined','cancelled'],
-    confirmed:['in_progress','cancelled'],
-    assigned:['in_progress','cancelled'],
+    confirmed:['assigned','cancelled'],
+    assigned:['confirmed','in_progress','cancelled'],
     in_progress:['completed','cancelled'],
     completed:[],cancelled:[],declined:[]
   };
