@@ -5,6 +5,10 @@ import { acceptInvitation } from './business_resources.js';
 import { initializeProviderProfile } from './provider_resources.js';
 import { handleAdminProviderApi, handleProviderApi } from './provider_api.js';
 import {
+  handleAdminFinanceApi, handleBusinessFinanceApi, handleCustomerFinanceApi,
+  handlePaystackWebhook, handleProviderFinanceApi
+} from './finance_api.js';
+import {
   authenticateAccessToken,
   getAccountProfile,
   loginAccount,
@@ -95,6 +99,28 @@ function logSafeError(event, error) {
     code: typeof error?.code === 'string' ? error.code : 'NO_CODE',
     name: typeof error?.name === 'string' ? error.name : 'UNKNOWN_ERROR'
   }));
+}
+
+async function readRawBody(req) {
+  const declaredLength = Number(req.headers['content-length'] || 0);
+  if (declaredLength > MAX_BODY_BYTES) {
+    req.resume();
+    const err = new Error('Request body exceeds 1 MB.');
+    err.code = 'BODY_TOO_LARGE';
+    throw err;
+  }
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of req) {
+    length += chunk.length;
+    if (length > MAX_BODY_BYTES) {
+      const err = new Error('Request body exceeds 1 MB.');
+      err.code = 'BODY_TOO_LARGE';
+      throw err;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function readJsonBody(req) {
@@ -430,6 +456,36 @@ export async function requestHandler(req, res) {
     }
   }
 
+  if (url.pathname === '/api/v1/webhooks/paystack') {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return json(res, 405, errorResponse('METHOD_NOT_ALLOWED', 'HTTP method is not supported for this route.'));
+    }
+    try {
+      const rawBody = await readRawBody(req);
+      const outcome = await handlePaystackWebhook(rawBody, req.headers);
+      return json(res, outcome.status, outcome.body);
+    } catch (error) {
+      if (error?.code === 'BODY_TOO_LARGE') return json(res, 413, errorResponse('BODY_TOO_LARGE', error.message));
+      logSafeError('paystack_webhook_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'Webhook processing failed.'));
+    }
+  }
+
+  if (/^\/api\/v1\/admin\/(?:payouts|disputes)(?:\/|$)/.test(url.pathname)) {
+    try {
+      const outcome = await handleAdminFinanceApi(req, url);
+      if (outcome.noContent) {
+        res.statusCode = outcome.status;
+        return res.end();
+      }
+      return json(res, outcome.status, outcome.body);
+    } catch (error) {
+      logSafeError('admin_finance_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
   if (url.pathname === '/api/v1/admin/providers/pending' ||
       /^\/api\/v1\/admin\/providers\/[^/]+\/verification$/.test(url.pathname)) {
     try {
@@ -441,6 +497,23 @@ export async function requestHandler(req, res) {
       return json(res, response.status, response.body);
     } catch (error) {
       logSafeError('admin_provider_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/provider/payout-account' ||
+      url.pathname === '/api/v1/provider/payouts') {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const outcome = await handleProviderFinanceApi(req, url, authenticated.user);
+      if (outcome.noContent) {
+        res.statusCode = outcome.status;
+        return res.end();
+      }
+      return json(res, outcome.status, outcome.body);
+    } catch (error) {
+      logSafeError('provider_finance_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
     }
   }
@@ -464,6 +537,22 @@ export async function requestHandler(req, res) {
   if (url.pathname === '/api/v1/market/services') {
     const response = await handleMarketplaceApi(req, url);
     return json(res, response.status, response.body);
+  }
+
+  if (/^\/api\/v1\/customer\/(?:bookings\/[^/]+\/(?:payments|review|disputes)|payments\/[^/]+\/verify|disputes\/[^/]+\/messages)$/.test(url.pathname)) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const outcome = await handleCustomerFinanceApi(req, url, authenticated.user);
+      if (outcome.noContent) {
+        res.statusCode = outcome.status;
+        return res.end();
+      }
+      return json(res, outcome.status, outcome.body);
+    } catch (error) {
+      logSafeError('customer_finance_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
   }
 
   if (url.pathname === '/api/v1/customer' || url.pathname.startsWith('/api/v1/customer/')) {
@@ -514,6 +603,27 @@ export async function requestHandler(req, res) {
       return json(res, response.status, response.body);
     } catch (error) {
       logSafeError('business_provider_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/business/reviews' ||
+      url.pathname === '/api/v1/business/disputes' ||
+      /^\/api\/v1\/business\/bookings\/[^/]+\/(?:refunds|dispute)$/.test(url.pathname) ||
+      /^\/api\/v1\/business\/disputes\/[^/]+\/messages$/.test(url.pathname)) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const business = await resolveBusinessContext(req, authenticated.user);
+      if (business.error) return json(res, business.status, business.error);
+      const outcome = await handleBusinessFinanceApi(req, url, authenticated.user, business);
+      if (outcome.noContent) {
+        res.statusCode = outcome.status;
+        return res.end();
+      }
+      return json(res, outcome.status, outcome.body);
+    } catch (error) {
+      logSafeError('business_finance_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
     }
   }
