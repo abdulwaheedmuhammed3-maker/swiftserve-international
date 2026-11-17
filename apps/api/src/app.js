@@ -9,6 +9,10 @@ import {
   handlePaystackWebhook, handleProviderFinanceApi
 } from './finance_api.js';
 import {
+  authenticateAdminAccessToken, handleAdminAuthApi, handleAdminAccountRoute
+} from './admin_auth.js';
+import { runWithAdminContext } from './admin_context.js';
+import {
   authenticateAccessToken,
   getAccountProfile,
   loginAccount,
@@ -299,6 +303,27 @@ async function authenticateRequest(req) {
   return authenticateAccessToken(token);
 }
 
+function adminRolesForPath(pathname) {
+  if (/^\/api\/v1\/admin\/admins(?:\/|$)/.test(pathname)) return ['super_admin'];
+  if (/^\/api\/v1\/admin\/providers(?:\/|$)/.test(pathname)) return ['super_admin', 'provider_reviewer'];
+  if (/^\/api\/v1\/admin\/(?:finance|payouts)(?:\/|$)/.test(pathname)) return ['super_admin', 'finance_admin'];
+  if (/^\/api\/v1\/admin\/disputes(?:\/|$)/.test(pathname)) return ['super_admin', 'support_admin', 'finance_admin'];
+  if (/^\/api\/v1\/admin\/audit-logs(?:\/|$)/.test(pathname)) return ['super_admin', 'support_admin', 'finance_admin'];
+  return null;
+}
+
+function sendAdminOutcome(res, outcome) {
+  return json(res, outcome.status, outcome.body);
+}
+
+function adminRouteError(res, error, event) {
+  if (error?.code === 'INVALID_JSON') return json(res, 400, errorResponse('INVALID_JSON', error.message));
+  if (error?.code === 'UNSUPPORTED_MEDIA_TYPE') return json(res, 415, errorResponse('UNSUPPORTED_MEDIA_TYPE', error.message));
+  if (error?.code === 'BODY_TOO_LARGE') return json(res, 413, errorResponse('BODY_TOO_LARGE', error.message));
+  logSafeError(event, error);
+  return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected administrator API error occurred.'));
+}
+
 async function resolveBusinessContext(req, user) {
   const businessId = req.headers['x-swiftserve-business-id'];
   if (!businessId) {
@@ -472,32 +497,61 @@ export async function requestHandler(req, res) {
     }
   }
 
-  if (/^\/api\/v1\/admin\/(?:payouts|disputes|audit-logs|finance)(?:\/|$)/.test(url.pathname)) {
+  const adminAuthMatch = url.pathname.match(/^\/api\/v1\/admin\/auth\/(bootstrap|login|logout|me)$/);
+  if (adminAuthMatch) {
+    if (['bootstrap','login'].includes(adminAuthMatch[1]) && req.method === 'POST' &&
+        !checkAuthRateLimit(req, res)) {
+      return json(res, 429, errorResponse('AUTH_RATE_LIMITED', 'Too many administrator sign-in or bootstrap attempts. Try again later.'));
+    }
     try {
-      const outcome = await handleAdminFinanceApi(req, url);
-      if (outcome.noContent) {
-        res.statusCode = outcome.status;
-        return res.end();
-      }
-      return json(res, outcome.status, outcome.body);
+      const token = getBearerToken(req);
+      const authenticated = token ? await authenticateAdminAccessToken(token) : null;
+      const outcome = await handleAdminAuthApi(req, url, authenticated);
+      return sendAdminOutcome(res, outcome);
     } catch (error) {
-      logSafeError('admin_finance_route_failed', error);
-      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+      return adminRouteError(res, error, 'admin_auth_route_failed');
     }
   }
 
-  if (url.pathname === '/api/v1/admin/providers/pending' ||
-      /^\/api\/v1\/admin\/providers\/[^/]+\/verification$/.test(url.pathname)) {
+  if (url.pathname === '/api/v1/admin/admins' ||
+      /^\/api\/v1\/admin\/admins\/[^/]+$/.test(url.pathname)) {
     try {
-      const response = await handleAdminProviderApi(req, url);
-      if (response.noContent) {
-        res.statusCode = response.status;
-        return res.end();
+      const token = getBearerToken(req);
+      const authenticated = token ? await authenticateAdminAccessToken(token) : null;
+      if (!authenticated) return json(res, 401, errorResponse('ADMIN_UNAUTHORIZED', 'A valid administrator bearer token is required.'));
+      if (authenticated.admin.role !== 'super_admin') {
+        return json(res, 403, errorResponse('ADMIN_FORBIDDEN', 'Only a super administrator can manage administrator accounts.'));
       }
-      return json(res, response.status, response.body);
+      const outcome = await runWithAdminContext(authenticated.admin, () =>
+        handleAdminAccountRoute(req, url, authenticated.admin)
+      );
+      return sendAdminOutcome(res, outcome);
     } catch (error) {
-      logSafeError('admin_provider_route_failed', error);
-      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+      return adminRouteError(res, error, 'admin_accounts_route_failed');
+    }
+  }
+
+  if (url.pathname.startsWith('/api/v1/admin/')) {
+    const allowedRoles = adminRolesForPath(url.pathname);
+    if (!allowedRoles) return json(res, 404, errorResponse('NOT_FOUND', 'Administrator route not found.'));
+    try {
+      const token = getBearerToken(req);
+      const authenticated = token ? await authenticateAdminAccessToken(token) : null;
+      if (!authenticated) return json(res, 401, errorResponse('ADMIN_UNAUTHORIZED', 'A valid administrator bearer token is required.'));
+      if (!allowedRoles.includes(authenticated.admin.role)) {
+        return json(res, 403, errorResponse('ADMIN_FORBIDDEN', 'Your administrator role does not permit this operation.'));
+      }
+      return await runWithAdminContext(authenticated.admin, async () => {
+        const isProviderRoute = url.pathname.startsWith('/api/v1/admin/providers/');
+        const outcome = isProviderRoute
+          ? await handleAdminProviderApi(req, url)
+          : await handleAdminFinanceApi(req, url);
+        return outcome.noContent
+          ? (res.statusCode = outcome.status, res.end())
+          : sendAdminOutcome(res, outcome);
+      });
+    } catch (error) {
+      return adminRouteError(res, error, 'admin_route_failed');
     }
   }
 
