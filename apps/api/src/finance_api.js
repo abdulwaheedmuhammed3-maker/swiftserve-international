@@ -840,7 +840,10 @@ export async function handlePaystackWebhook(rawBody,headers){
     }
   }else if(['transfer.success','transfer.failed','transfer.reversed'].includes(eventType)){
     const reference=String(data.reference||'');
-    if(reference)await updatePayoutByTransferReference(reference,eventType==='transfer.success'?'paid':'failed',data.id?String(data.id):null);
+    if(reference)await updatePayoutByTransferReference(
+      reference,eventType==='transfer.success'?'paid':eventType==='transfer.reversed'?'reversed':'failed',
+      data.id?String(data.id):null
+    );
   }
   return {status:200,body:{received:true}};
   }catch(error){
