@@ -581,6 +581,127 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(providerCompleted.status, 200);
     assert.equal(providerCompleted.body.data.status, 'completed');
 
+    const adminPayouts=await call('/api/v1/admin/payouts/pending',{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(adminPayouts.status,200);
+    const payout=adminPayouts.body.data.find(item=>item.bookingId===booking.body.data.id);
+    assert.ok(payout);
+    assert.equal(payout.grossAmountMinor,250000);
+    assert.equal(payout.platformFeeMinor,25000);
+    assert.equal(payout.netAmountMinor,225000);
+    assert.equal(payout.status,'pending');
+
+    const payoutStarted=await call('/api/v1/admin/payouts/'+payout.id+'/process',{
+      method:'POST',
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(payoutStarted.status,202);
+    assert.equal(payoutStarted.body.data.status,'processing');
+    assert.equal(payoutStarted.body.data.transferReference,gatewayState.transferReference);
+
+    const transferWebhook=await sendPaystackWebhook({
+      event:'transfer.success',
+      data:{
+        id:123456789,
+        reference:gatewayState.transferReference,
+        status:'success',
+        amount:225000,
+        currency:'NGN'
+      }
+    });
+    assert.equal(transferWebhook.status,200);
+    assert.equal(transferWebhook.body.received,true);
+
+    const duplicateTransferWebhook=await sendPaystackWebhook({
+      event:'transfer.success',
+      data:{
+        id:123456789,
+        reference:gatewayState.transferReference,
+        status:'success',
+        amount:225000,
+        currency:'NGN'
+      }
+    });
+    assert.equal(duplicateTransferWebhook.status,200);
+    assert.equal(duplicateTransferWebhook.body.duplicate,true);
+
+    const providerPayouts=await call('/api/v1/provider/payouts',{headers:providerHeaders});
+    assert.equal(providerPayouts.status,200);
+    assert.equal(providerPayouts.body.data[0].status,'paid');
+    assert.equal(providerPayouts.body.data[0].netAmountMinor,225000);
+
+    const review=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/review',{
+      method:'POST',
+      headers:customerHeaders,
+      body:JSON.stringify({rating:5,comment:'The work was completed as agreed.'})
+    });
+    assert.equal(review.status,201);
+    assert.equal(review.body.data.rating,5);
+
+    const businessReviews=await call('/api/v1/business/reviews',{headers:first.headers});
+    assert.equal(businessReviews.status,200);
+    assert.ok(businessReviews.body.data.some(item=>item.bookingId===booking.body.data.id));
+    const providerReviews=await call('/api/v1/provider/reviews',{headers:providerHeaders});
+    assert.equal(providerReviews.status,200);
+    assert.ok(providerReviews.body.data.some(item=>item.bookingId===booking.body.data.id));
+
+    const dispute=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/disputes',{
+      method:'POST',
+      headers:customerHeaders,
+      body:JSON.stringify({
+        category:'service_quality',
+        description:'The customer wants a follow-up review of one part of the finished service.',
+        requestedResolution:'refund_partial'
+      })
+    });
+    assert.equal(dispute.status,201);
+    assert.equal(dispute.body.data.status,'open');
+
+    const customerDispute=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/disputes',{
+      headers:customerHeaders
+    });
+    assert.equal(customerDispute.status,200);
+    assert.equal(customerDispute.body.data.id,dispute.body.data.id);
+
+    const customerDisputeMessages=await call('/api/v1/customer/disputes/'+dispute.body.data.id+'/messages',{
+      headers:customerHeaders
+    });
+    assert.equal(customerDisputeMessages.status,200);
+    assert.equal(customerDisputeMessages.body.data.length,1);
+
+    const businessDisputeMessage=await call('/api/v1/business/disputes/'+dispute.body.data.id+'/messages',{
+      method:'POST',
+      headers:first.headers,
+      body:JSON.stringify({message:'We have reviewed the service notes and will investigate.'})
+    });
+    assert.equal(businessDisputeMessage.status,201);
+
+    const customerFollowup=await call('/api/v1/customer/disputes/'+dispute.body.data.id+'/messages',{
+      method:'POST',
+      headers:customerHeaders,
+      body:JSON.stringify({message:'Thank you. Please confirm the proposed resolution.'})
+    });
+    assert.equal(customerFollowup.status,201);
+
+    const adminDisputes=await call('/api/v1/admin/disputes/pending',{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(adminDisputes.status,200);
+    assert.ok(adminDisputes.body.data.some(item=>item.id===dispute.body.data.id));
+
+    const resolvedDispute=await call('/api/v1/admin/disputes/'+dispute.body.data.id,{
+      method:'PATCH',
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'},
+      body:JSON.stringify({
+        status:'resolved',
+        resolution:'refund_partial',
+        note:'The partial refund has been recorded and the issue is closed.'
+      })
+    });
+    assert.equal(resolvedDispute.status,200);
+    assert.equal(resolvedDispute.body.data.status,'resolved');
+
     const finalBooking = await call('/api/v1/customer/bookings/' + booking.body.data.id, {
       headers: customerHeaders
     });
