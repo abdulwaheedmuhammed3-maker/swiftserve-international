@@ -13,7 +13,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
 
   const envKeys = [
     'PAYSTACK_SECRET_KEY','PAYSTACK_WEBHOOK_SECRET','PAYSTACK_API_BASE_URL',
-    'PAYSTACK_CALLBACK_URL','SWIFTSERVE_ADMIN_API_KEY','SWIFTSERVE_ADMIN_ACTOR_ID','SWIFTSERVE_PLATFORM_FEE_BPS'
+    'PAYSTACK_CALLBACK_URL','SWIFTSERVE_ADMIN_BOOTSTRAP_KEY','SWIFTSERVE_PLATFORM_FEE_BPS'
   ];
   const previousEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
   const gatewayState = { reference: null, amount: null, currency: null, transferReference: null, transactionStatus: 'success', transferStatus: 'pending', transferCalls: 0 };
@@ -66,8 +66,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
   process.env.PAYSTACK_SECRET_KEY='sk_test_swiftserve_mock_only';
   process.env.PAYSTACK_WEBHOOK_SECRET='swiftserve_mock_webhook_secret';
   process.env.PAYSTACK_API_BASE_URL='http://127.0.0.1:'+paystackMock.address().port;
-  process.env.SWIFTSERVE_ADMIN_API_KEY='swiftserve-ci-admin-key';
-  process.env.SWIFTSERVE_ADMIN_ACTOR_ID='swiftserve-ci-admin';
+  process.env.SWIFTSERVE_ADMIN_BOOTSTRAP_KEY='swiftserve-ci-bootstrap-secret';
   process.env.SWIFTSERVE_PLATFORM_FEE_BPS='1000';
 
   const { requestHandler } = await import('../src/app.js');
@@ -95,6 +94,57 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
       body: raw ? JSON.parse(raw) : null
     };
   }
+
+  const bootstrap=await call('/api/v1/admin/auth/bootstrap',{
+    method:'POST',
+    headers:{'X-SwiftServe-Admin-Bootstrap-Key':'swiftserve-ci-bootstrap-secret'},
+    body:JSON.stringify({
+      email:'integration-super-admin@example.test',
+      password:'Integration-Admin#12345',
+      fullName:'Integration Super Admin'
+    })
+  });
+  assert.equal(bootstrap.status,201);
+  const integrationAdmin=bootstrap.body.data.admin;
+  const adminHeaders={Authorization:'Bearer '+bootstrap.body.data.accessToken};
+
+  const financeAdminCreated=await call('/api/v1/admin/admins',{
+    method:'POST',headers:adminHeaders,
+    body:JSON.stringify({
+      email:'integration-finance-admin@example.test',
+      password:'Integration-Finance#12345',
+      fullName:'Integration Finance Admin',
+      role:'finance_admin'
+    })
+  });
+  assert.equal(financeAdminCreated.status,201);
+  const financeLogin=await call('/api/v1/admin/auth/login',{
+    method:'POST',
+    body:JSON.stringify({email:'integration-finance-admin@example.test',password:'Integration-Finance#12345'})
+  });
+  assert.equal(financeLogin.status,200);
+  const financeHeaders={Authorization:'Bearer '+financeLogin.body.data.accessToken};
+  assert.equal((await call('/api/v1/admin/finance/summary',{headers:financeHeaders})).status,200);
+  assert.equal((await call('/api/v1/admin/providers/pending',{headers:financeHeaders})).status,403);
+
+  const providerAdminCreated=await call('/api/v1/admin/admins',{
+    method:'POST',headers:adminHeaders,
+    body:JSON.stringify({
+      email:'integration-provider-reviewer@example.test',
+      password:'Integration-Provider#12345',
+      fullName:'Integration Provider Reviewer',
+      role:'provider_reviewer'
+    })
+  });
+  assert.equal(providerAdminCreated.status,201);
+  const providerAdminLogin=await call('/api/v1/admin/auth/login',{
+    method:'POST',
+    body:JSON.stringify({email:'integration-provider-reviewer@example.test',password:'Integration-Provider#12345'})
+  });
+  assert.equal(providerAdminLogin.status,200);
+  const providerReviewerHeaders={Authorization:'Bearer '+providerAdminLogin.body.data.accessToken};
+  assert.equal((await call('/api/v1/admin/providers/pending',{headers:providerReviewerHeaders})).status,200);
+  assert.equal((await call('/api/v1/admin/finance/summary',{headers:providerReviewerHeaders})).status,403);
 
   async function sendPaystackWebhook(event) {
     const raw=Buffer.from(JSON.stringify(event));
@@ -610,7 +660,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(providerCompleted.body.data.status, 'completed');
 
     const adminPayouts=await call('/api/v1/admin/payouts/pending',{
-      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+      headers:adminHeaders
     });
     assert.equal(adminPayouts.status,200);
     const payout=adminPayouts.body.data.find(item=>item.bookingId===booking.body.data.id);
@@ -622,13 +672,13 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
 
     const payoutStarted=await call('/api/v1/admin/payouts/'+payout.id+'/process',{
       method:'POST',
-      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+      headers:adminHeaders
     });
     assert.equal(payoutStarted.status,202);
     assert.equal(payoutStarted.body.data.status,'processing');
     assert.equal(payoutStarted.body.data.transferReference,gatewayState.transferReference);
     const payoutRetryWhilePending=await call('/api/v1/admin/payouts/'+payout.id+'/process',{
-      method:'POST',headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+      method:'POST',headers:adminHeaders
     });
     assert.equal(payoutRetryWhilePending.status,202);
     assert.equal(payoutRetryWhilePending.body.data.status,'processing');
@@ -644,7 +694,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     gatewayState.transferStatus='success';
     const reconciliation=await call('/api/v1/admin/finance/reconciliation',{
       method:'POST',
-      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'},
+      headers:adminHeaders,
       body:JSON.stringify({limit:20})
     });
     assert.equal(reconciliation.status,201);
@@ -654,26 +704,28 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.deepEqual(reconciliation.body.data.items.map(item=>item.entityType),['payment','payout']);
     assert.ok(reconciliation.body.data.items.every(item=>item.outcome==='updated'));
 
+    assert.equal(reconciliation.body.data.run.actorAdminId,integrationAdmin.id);
     const reconciliationDetail=await call('/api/v1/admin/finance/reconciliation/'+reconciliation.body.data.run.id,{
-      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+      headers:adminHeaders
     });
     assert.equal(reconciliationDetail.status,200);
     assert.equal(reconciliationDetail.body.data.items.length,2);
     assert.ok(reconciliationDetail.body.data.items.every(item=>item.providerStatus==='success'));
 
     const financeSummary=await call('/api/v1/admin/finance/summary',{
-      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+      headers:adminHeaders
     });
     assert.equal(financeSummary.status,200);
     assert.equal(financeSummary.body.data.processing_payouts,0);
 
     const auditLogs=await call('/api/v1/admin/audit-logs?limit=100',{
-      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+      headers:adminHeaders
     });
     assert.equal(auditLogs.status,200);
     assert.ok(auditLogs.body.data.some(item=>item.action==='finance.payout.transfer_requested'));
     assert.ok(auditLogs.body.data.some(item=>item.action==='finance.reconciliation.completed'));
-    assert.ok(auditLogs.body.data.every(item=>item.actorKeyId==='swiftserve-ci-admin'));
+    assert.ok(auditLogs.body.data.some(item=>item.actorAdminId===integrationAdmin.id));
+    assert.ok(auditLogs.body.data.every(item=>item.actorKeyId.startsWith('admin:')));
 
     const transferWebhook=await sendPaystackWebhook({
       event:'transfer.success',
@@ -783,14 +835,14 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(customerFollowup.status,201);
 
     const adminDisputes=await call('/api/v1/admin/disputes/pending',{
-      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+      headers:adminHeaders
     });
     assert.equal(adminDisputes.status,200);
     assert.ok(adminDisputes.body.data.some(item=>item.id===dispute.body.data.id));
 
     const resolvedDispute=await call('/api/v1/admin/disputes/'+dispute.body.data.id,{
       method:'PATCH',
-      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'},
+      headers:adminHeaders,
       body:JSON.stringify({
         status:'resolved',
         resolution:'refund_partial',
