@@ -1,44 +1,53 @@
 # Supabase Setup (Phone-Friendly)
 
-Supabase provides a managed PostgreSQL database. You can create and manage the project in a mobile browser.
+Supabase provides managed PostgreSQL. Use a separate development project first. Do not store real customer information in the development database.
 
-## 1. Create the project
+## 1. Create a development project
 
-1. Open https://supabase.com/dashboard in your phone browser.
-2. Sign in or create an account.
-3. Choose **New project**.
-4. Name it `swiftserve-dev`.
-5. Choose a strong database password and store it in a password manager. Do not send it in chat or commit it to GitHub.
-6. Select a region close to the first pilot users and wait for the database to finish provisioning.
+1. Open https://supabase.com/dashboard.
+2. Sign in and choose New project.
+3. Name it swiftserve-dev.
+4. Choose a strong database password and store it in a password manager.
+5. Select a region suitable for your first development and pilot environment.
+6. Wait for the database to finish provisioning.
 
-Use this as a development database only. Keep the GitHub repository private.
+Do not send the database password or connection string in chat, screenshots, GitHub issues or source files.
 
-## 2. Apply the schema
+## 2. Apply the current schema
 
-1. Open your project in Supabase.
-2. Open **SQL Editor** and create a new query.
-3. Open this repository file in another tab and copy its contents:
-   `apps/api/db/migrations/001_initial_schema.sql`
-4. Paste the SQL into the SQL Editor and run it.
-5. Confirm the `service_requests` table appears in **Table Editor**.
+1. Open the Supabase project.
+2. Open SQL Editor and create a new query.
+3. Open apps/api/db/migrations/001_initial_schema.sql in this repository.
+4. Copy the SQL into the SQL Editor and run it.
+5. Confirm that service_requests appears in Table Editor.
 
-Do not put a database password or connection string in the SQL migration.
+This migration creates only the initial service-request table. It does not provide user accounts, business ownership, provider records or customer bookings yet.
 
-## 3. Get the connection string safely
+## 3. Configure the API connection
 
-1. In Supabase, open **Project Settings → Database**.
-2. Find **Connection string** and select the URI format. Prefer the transaction/session pooler connection details recommended by Supabase for your environment.
-3. Treat the full connection string as a password. Do not paste it into this public documentation, a GitHub file, screenshot, issue, or chat.
-4. It will be added to the runtime environment as `DATABASE_URL` when the API database adapter is ready.
+1. In Supabase, open Project Settings → Database.
+2. Find Connection string and select URI.
+3. Choose the connection method appropriate for the host. Use the Supabase pooler option when required by the hosting environment.
+4. Copy the connection string privately.
+5. Add it as DATABASE_URL in the API runtime environment. For Render, use the service's Environment settings and mark the value as secret.
+6. Never add DATABASE_URL to the Android app, frontend code, repository, or public documentation.
 
-## Current implementation status
+The API uses PostgreSQL when DATABASE_URL is configured. In local development without DATABASE_URL it uses volatile in-memory storage. In production it refuses to start without DATABASE_URL and checks the database connection before listening.
 
-The repository includes the initial SQL schema and PostgreSQL client dependency. The existing API still uses in-memory storage until the database adapter is connected and integration tests pass. Creating a Supabase project alone will not make the API persistent.
+## 4. Verify persistence
 
-## Before real use
+After deploying or starting the API:
 
-- Use a least-privilege database role and TLS.
-- Keep credentials in the hosting provider's secret settings.
-- Do not expose the database connection string to frontend code.
-- Do not store real customer information until authentication, authorization, backups, privacy and retention practices are implemented.
-- Rotate the database password immediately if it is accidentally exposed.
+1. Open /health to confirm that the process responds.
+2. Open /readyz to confirm the API's storage dependency is ready.
+3. Create a test service request.
+4. Restart the API.
+5. Retrieve the request and confirm it still exists.
+
+A successful /health response alone does not prove that PostgreSQL is available. Use /readyz to check database readiness.
+
+## 5. Important limitations
+
+The current service_requests schema is not yet safe for a multi-business production platform. Authentication and business-scoped authorization must be implemented before real customer or provider information is stored.
+
+Before a pilot, also configure a least-privilege database role, TLS, separate development and production environments, automated backups, restore testing, privacy and retention procedures. Rotate the database password immediately if it is accidentally exposed.
