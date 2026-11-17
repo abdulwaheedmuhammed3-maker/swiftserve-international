@@ -425,6 +425,107 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(finalBooking.status, 200);
     assert.equal(finalBooking.body.data.status, 'completed');
 
+    const paymentKeys = [
+      'PAYMENT_PROVIDER','PAYMENT_RETURN_URL','PAYSTACK_SECRET_KEY',
+      'PAYSTACK_WEBHOOK_SECRET','FLUTTERWAVE_SECRET_KEY','FLUTTERWAVE_WEBHOOK_SECRET_HASH'
+    ];
+    const previousPaymentEnv = Object.fromEntries(paymentKeys.map(key => [key, process.env[key]]));
+    for (const key of paymentKeys) delete process.env[key];
+
+    const paymentMissingKey = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/payment-intents', {
+      method: 'POST',
+      headers: customerHeaders,
+      body: JSON.stringify({})
+    });
+    assert.equal(paymentMissingKey.status, 400);
+
+    const paymentDisabled = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/payment-intents', {
+      method: 'POST',
+      headers: { ...customerHeaders, 'Idempotency-Key': 'pg-payment-intent-test-0001' },
+      body: JSON.stringify({})
+    });
+    assert.equal(paymentDisabled.status, 503);
+    assert.equal(paymentDisabled.body.error.code, 'PAYMENTS_DISABLED');
+
+    const invalidWebhook = await call('/api/v1/webhooks/payments/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': '00' },
+      body: JSON.stringify({ event: 'charge.success', data: { id: 100, reference: 'fake-reference' } })
+    });
+    assert.equal(invalidWebhook.status, 401);
+    for (const key of paymentKeys) {
+      if (previousPaymentEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousPaymentEnv[key];
+    }
+
+    const createdReview = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/review', {
+      method: 'POST',
+      headers: customerHeaders,
+      body: JSON.stringify({
+        businessRating: 5,
+        providerRating: 5,
+        reviewText: 'The service was completed and the home was left tidy.'
+      })
+    });
+    assert.equal(createdReview.status, 201);
+    assert.equal(createdReview.body.data.businessRating, 5);
+
+    const businessReviews = await call('/api/v1/business/reviews', { headers: first.headers });
+    assert.equal(businessReviews.status, 200);
+    assert.ok(businessReviews.body.data.some(item => item.id === createdReview.body.data.id));
+
+    const reviewResponse = await call('/api/v1/business/reviews/' + createdReview.body.data.id + '/response', {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify({ responseText: 'Thank you for taking the time to leave feedback.' })
+    });
+    assert.equal(reviewResponse.status, 201);
+
+    const openedDispute = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/disputes', {
+      method: 'POST',
+      headers: customerHeaders,
+      body: JSON.stringify({
+        category: 'quality_issue',
+        description: 'A recurring issue was found after the technician completed the service.'
+      })
+    });
+    assert.equal(openedDispute.status, 201);
+    assert.equal(openedDispute.body.data.status, 'open');
+
+    const disputeMessage = await call('/api/v1/business/disputes/' + openedDispute.body.data.id + '/messages', {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify({ message: 'We will review the issue and contact the customer.' })
+    });
+    assert.equal(disputeMessage.status, 201);
+
+    const disputeDetail = await call('/api/v1/customer/disputes/' + openedDispute.body.data.id, {
+      headers: customerHeaders
+    });
+    assert.equal(disputeDetail.status, 200);
+    assert.equal(disputeDetail.body.data.status, 'awaiting_customer');
+    assert.equal(disputeDetail.body.data.messages.length, 2);
+
+    const previousAdminKey = process.env.SWIFTSERVE_ADMIN_API_KEY;
+    process.env.SWIFTSERVE_ADMIN_API_KEY = 'swiftserve-ci-admin-key';
+    const disputeReview = await call('/api/v1/admin/disputes/' + openedDispute.body.data.id, {
+      method: 'PATCH',
+      headers: { 'X-SwiftServe-Admin-Key': 'swiftserve-ci-admin-key' },
+      body: JSON.stringify({ status: 'under_review', resolutionNote: 'CI review state.' })
+    });
+    assert.equal(disputeReview.status, 200);
+    assert.equal(disputeReview.body.data.status, 'under_review');
+
+    const disputeResolved = await call('/api/v1/admin/disputes/' + openedDispute.body.data.id, {
+      method: 'PATCH',
+      headers: { 'X-SwiftServe-Admin-Key': 'swiftserve-ci-admin-key' },
+      body: JSON.stringify({ status: 'resolved_customer', resolutionNote: 'The business agreed to a free return visit.' })
+    });
+    assert.equal(disputeResolved.status, 200);
+    assert.equal(disputeResolved.body.data.status, 'resolved_customer');
+    if (previousAdminKey === undefined) delete process.env.SWIFTSERVE_ADMIN_API_KEY;
+    else process.env.SWIFTSERVE_ADMIN_API_KEY = previousAdminKey;
+
     const otherBusinessBookings = await call('/api/v1/business/bookings', {
       headers: second.headers
     });
@@ -470,6 +571,11 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     server.closeAllConnections?.();
     await new Promise(resolve => server.close(resolve));
     if (businessIds.length) {
+      await pool.query('DELETE FROM service_dispute_messages WHERE dispute_id IN (SELECT id FROM service_disputes WHERE business_id = ANY($1::uuid[]))', [businessIds]);
+      await pool.query('DELETE FROM service_disputes WHERE business_id = ANY($1::uuid[])', [businessIds]);
+      await pool.query('DELETE FROM service_review_responses WHERE business_id = ANY($1::uuid[])', [businessIds]);
+      await pool.query('DELETE FROM service_reviews WHERE business_id = ANY($1::uuid[])', [businessIds]);
+      await pool.query('DELETE FROM payment_intents WHERE business_id = ANY($1::uuid[])', [businessIds]);
       await pool.query('DELETE FROM bookings WHERE business_id = ANY($1::uuid[])', [businessIds]);
       await pool.query('DELETE FROM service_requests WHERE business_id = ANY($1::uuid[])', [businessIds]);
       await pool.query('DELETE FROM businesses WHERE id = ANY($1::uuid[])', [businessIds]);
