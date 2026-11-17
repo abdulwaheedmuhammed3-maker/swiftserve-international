@@ -35,6 +35,7 @@ The current migration files are:
 1. apps/api/db/migrations/001_initial_schema.sql
 2. apps/api/db/migrations/002_identity_business_scope.sql
 3. apps/api/db/migrations/003_business_operations.sql
+4. apps/api/db/migrations/004_customer_bookings.sql
 
 For Render, configure the start command to run migrations before the server:
 
@@ -48,20 +49,21 @@ After deploying or starting the API:
 
 1. Open /health to confirm the process responds.
 2. Open /readyz to confirm the database schema and recorded migrations are ready.
-3. Register a test business account and create a test request.
-4. Sign out, restart the API and sign in again.
-5. Retrieve the request and confirm that it remains and is visible only to the owning business.
+3. Register a test business, publish an active service, create a branch and add a service area.
+4. Register a separate customer, save a service location and create a booking request.
+5. Issue a quote from the business account, accept it from the customer account and inspect the booking status history and notifications.
+6. Restart the API, sign in again and verify that the booking and saved address remain and are visible only to their authorized accounts.
 
 A successful /health response alone does not prove PostgreSQL is ready. Use /readyz for dependency and schema readiness.
 
 ## 5. CI integration tests
 
-GitHub Actions runs a temporary PostgreSQL 16 database, applies the migrations, and tests account persistence, session revocation and business isolation. This provides automated database integration coverage, but it does not replace verifying your own Supabase project and Render deployment.
+GitHub Actions runs a temporary PostgreSQL 16 database, applies migrations 001–004, and tests account persistence, session revocation, business isolation, customer locations, service bookings, quotes and notifications. This automated integration suite does not replace verifying your own Supabase project and Render deployment.
 
 ## 6. Important limitations
 
 Migration 002 adds nullable ownership columns to existing service requests. Older requests are not automatically assigned to a business and remain hidden from authenticated business request endpoints until their ownership is reviewed and backfilled deliberately.
 
-The platform is not production-ready. Business profile, catalogue, branch, hours, service-area and team-invitation endpoints are available in this development stage. Automated invitation email delivery, customer discovery and bookings, provider operations, provider verification, payments, notifications, reviews and operational support are still incomplete.
+The platform is not production-ready. Customer service discovery, saved locations, booking requests, quotes, status history and in-app notifications now exist in the API. The Android customer experience, provider onboarding/assignment, provider verification, payment collection/refunds, reviews, disputes, slot-capacity checks and automated email/SMS/push delivery remain incomplete.
 
 Before a pilot, configure a least-privilege database role, TLS, separate development and production environments, automated backups and restore tests, privacy and retention procedures. Rotate the database password immediately if it is accidentally exposed.

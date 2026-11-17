@@ -31,6 +31,11 @@ The Android application is currently a limited business workspace. The backend i
 - Process-local throttling for registration and login attempts.
 - Android business app with registration, login, logout and encrypted session-token storage using Android Keystore.
 - Business profile, branches, service catalogue, weekly hours, service coverage and team invitation API modules.
+- Public service discovery filtered by country, city, category and search term.
+- Customer profiles and private saved service locations.
+- Tenant-scoped booking requests, immutable address/price snapshots, quote history and status events.
+- In-app notifications for new bookings, quotes, quote responses, status changes and cancellations.
+- Checksum-verified migrations 001–004 and PostgreSQL 16 CI integration tests.
 - API regression tests and GitHub Actions workflows for API CI and debug APK builds.
 
 ## Known limitations
@@ -39,10 +44,12 @@ The Android application is currently a limited business workspace. The backend i
 - Session refresh and administrative session revocation are not implemented; bearer sessions expire after seven days.
 - The current registration route allows public business and customer account creation; abuse controls must be reviewed before public launch.
 - Authentication throttling is process-local and should move to a shared gateway/store before horizontal scaling.
-- There is not yet an automatic database migration runner or PostgreSQL integration test suite.
 - Legacy service requests created before business ownership was added are intentionally unassigned and hidden from business-scoped routes until a reviewed backfill is performed.
 - The Android app selects the first returned business; multi-business switching, team invitations and role-based screens are not implemented.
-- No customer app, provider app, business profile/catalogue, booking schedule, provider verification, payment, notification, reviews or dispute workflows yet.
+- The Android app still provides the business service-request MVP; customer marketplace and booking screens are not implemented.
+- No provider onboarding, availability, assignment or provider app yet.
+- No automatic email delivery for team invitations or customer booking communications; only in-app notifications are stored.
+- No slot capacity/availability conflict engine, payments, provider verification, reviews, disputes or refunds yet.
 
 ## Identity and authorization model
 
@@ -53,8 +60,9 @@ The Android application is currently a limited business workspace. The backend i
 - A business registration creates a business and an owner membership.
 - A request to a business-owned endpoint must include a bearer token and X-SwiftServe-Business-Id.
 - The API checks active business membership server-side before reading or changing requests.
-- All service-request reads and writes include business_id in the repository query.
-- Owners/admins can delete requests; members with other active roles can work with requests according to the current MVP routes.
+- All service-request and business-booking reads and writes are scoped to business_id in server-side queries.
+- Customer profile and location queries are scoped to the authenticated customer user ID.
+- Owners/admins/managers can issue quotes and change booking status; active staff can view bookings but cannot manage quote or status actions.
 
 The business identifier supplied by the client is only a selection hint. It is not authority by itself. The membership check and scoped SQL query are the security boundary.
 
@@ -70,6 +78,18 @@ The business identifier supplied by the client is only a selection hint. It is n
 8. **Payments and finance:** payment intents, provider payouts, refunds, fees, settlement and reconciliation through country-specific adapters.
 9. **Trust and safety:** reviews, reports, disputes, moderation, audit events and support workflows.
 10. **Administration and analytics:** market operations, platform configuration, service quality, revenue and operational reporting.
+
+## Customer marketplace and booking model
+
+Public marketplace discovery returns active business services and can filter by country, city, category and text search. Customer routes require a customer account. Saved locations are owned by a customer user and are never selected by an arbitrary client-supplied owner ID.
+
+A booking stores a snapshot of the service name, category, pricing model, currency, service price, service address and requested schedule. This prevents future edits to a business catalogue item or customer saved address from silently changing an existing booking. Composite foreign keys scope service, branch, customer location, quote and status-event references.
+
+The current lifecycle is requested → quoted → confirmed, followed later by provider assignment and work progress. A customer can accept or decline a pending quote or cancel a booking while it is requested, quoted or confirmed. The business can confirm, decline or cancel a request, and move a confirmed booking into work progress and completion. Invalid transitions are rejected.
+
+Quote amounts are recorded in the smallest unit of the booking currency. This phase does not collect payment or reserve provider capacity. Opening hours and service coverage are stored, and the booking API checks the configured branch/coverage area, but slot conflict/capacity checks are still a future requirement.
+
+In-app notifications are stored for booking and quote events. Email, SMS and push delivery providers are not connected yet.
 
 ## Business operations model
 

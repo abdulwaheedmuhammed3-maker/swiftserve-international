@@ -56,18 +56,27 @@ SwiftServe is being developed as an international household-services platform. T
 - [ ] Connect an email provider for invitation delivery.
 - [ ] Add business settings and multiple-business switching in Android.
 - [ ] Add catalogue search, pagination and operational analytics.
-- [ ] Add booking capacity, job assignment and full booking status history.
+- [x] Add booking status history and customer/business status views.
+- [ ] Add booking capacity, slot-conflict checks and provider job assignment.
 
 **Exit condition:** a pilot business can onboard, publish its services and manage work without developer intervention.
 
 ## Stage 3 — Customer and provider experiences
 
-- [ ] Add customer profiles and saved service locations.
-- [ ] Add service discovery by category and service area.
-- [ ] Add quote requests, booking confirmation and rescheduling.
+- [x] Add customer account profile and locale/contact preferences.
+- [x] Add private saved service locations with ownership checks and default-address handling.
+- [x] Add public service discovery by country, city, category and search text.
+- [x] Add booking requests with branch/service-area validation and immutable service/address snapshots.
+- [x] Add business quotes with expiry, customer acceptance/decline and quote history.
+- [x] Add customer cancellation and business booking-status transitions.
+- [x] Add booking status history for customer and business views.
+- [x] Add in-app notifications for booking and quote events.
+- [x] Add API regression and PostgreSQL integration coverage for the customer booking lifecycle.
+- [ ] Add booking rescheduling and slot-capacity/conflict checks.
 - [ ] Add provider onboarding, availability and assignment workflows.
-- [ ] Add customer/provider notifications.
-- [ ] Add accessible, low-bandwidth mobile experiences and end-to-end tests.
+- [ ] Connect email, SMS and push notification delivery.
+- [ ] Build customer and provider mobile experiences with accessible, low-bandwidth UX.
+- [ ] Add end-to-end mobile workflow tests.
 
 **Exit condition:** a customer can find a service, book it, and follow its fulfilment through completion.
 

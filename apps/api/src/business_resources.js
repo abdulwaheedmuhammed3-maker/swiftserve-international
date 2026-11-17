@@ -117,10 +117,16 @@ export async function updateService(businessId, id, patch) {
 }
 
 export async function deleteService(businessId,id) {
-  const result = await queryDatabase('DELETE FROM business_services WHERE id=$1 AND business_id=$2',[id,businessId]);
+  const result = await queryDatabase(
+    'UPDATE business_services SET is_active=false,updated_at=now() WHERE id=$1 AND business_id=$2 RETURNING id',
+    [id,businessId]
+  );
   if (result) return result.rowCount > 0;
   const item=services.get(id);
-  return Boolean(item && item.businessId===businessId && services.delete(id));
+  if (!item || item.businessId!==businessId) return false;
+  item.isActive=false;
+  services.set(id,item);
+  return true;
 }
 
 export async function listBranches(businessId) {
@@ -181,13 +187,16 @@ export async function updateBranch(businessId,id,patch) {
 }
 
 export async function deleteBranch(businessId,id) {
-  const result=await queryDatabase('DELETE FROM business_branches WHERE id=$1 AND business_id=$2',[id,businessId]);
+  const result=await queryDatabase(
+    "UPDATE business_branches SET status='inactive',is_primary=false,updated_at=now() WHERE id=$1 AND business_id=$2 AND status='active'",
+    [id,businessId]
+  );
   if (result) return result.rowCount>0;
   const item=branches.get(id);
-  if (!item || item.businessId!==businessId) return false;
-  branches.delete(id);
-  for (const [key,hour] of hours) if (hour.branchId===id) hours.delete(key);
-  for (const [key,area] of areas) if (area.branchId===id) areas.delete(key);
+  if (!item || item.businessId!==businessId || item.status!=='active') return false;
+  item.status='inactive';
+  item.isPrimary=false;
+  branches.set(id,item);
   return true;
 }
 

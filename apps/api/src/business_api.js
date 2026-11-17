@@ -229,7 +229,11 @@ export async function handleBusinessApi(req, url, businessId, user, membership) 
       if (!validBusinessId(id)) return fail(400,'INVALID_ID','Service ID must be a valid UUID.');
       const existing = await getService(businessId,id);
       if (!existing) return fail(404,'SERVICE_NOT_FOUND','Service not found.');
-      if (method === 'GET') return ok(existing);
+      if (method === 'GET') {
+        return existing.isActive
+          ? ok(existing)
+          : fail(404,'SERVICE_NOT_FOUND','Active service not found.');
+      }
       if (method === 'PATCH') {
         if (!canManage) return fail(403,'INSUFFICIENT_ROLE','Your role cannot manage the service catalogue.');
         const body = await bodyJson(req);

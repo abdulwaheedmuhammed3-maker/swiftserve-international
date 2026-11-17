@@ -4,7 +4,7 @@
 
 SwiftServe is an international household-services platform, starting with a business-first workflow. It is designed to connect customers with service businesses and providers while giving businesses a workspace to manage requests and bookings.
 
-> **Development status:** identity and business-isolation foundation is implemented on the Phase 2 development branch. The platform is not production-ready. The business API now requires a bearer session and a business membership, but customer discovery and booking, provider operations, verification, payments and notifications are still under development. PostgreSQL migration 002 must be applied before using the identity routes with a database.
+> **Development status:** the API now includes customer accounts, business membership isolation, business operations, public service discovery, saved customer addresses, booking requests, quote handling, booking history and in-app notifications. This remains an MVP under active development, not a production-ready international marketplace. Provider onboarding and assignment, email delivery, payments, verification, reviews, disputes, Android customer screens and real Supabase/Render deployment verification are still outstanding.
 
 ## Repository structure
 
@@ -52,6 +52,7 @@ The current migrations are:
 1. apps/api/db/migrations/001_initial_schema.sql
 2. apps/api/db/migrations/002_identity_business_scope.sql
 3. apps/api/db/migrations/003_business_operations.sql
+4. apps/api/db/migrations/004_customer_bookings.sql
 
 For Render, the API start command can run migrations before starting the server:
 
@@ -61,7 +62,7 @@ The server checks that the required migration records and tables exist before it
 
 Never commit .env files or real credentials. In production, DATABASE_URL is required and the API refuses to start without it. The server checks the configured database and required core tables before listening. A missing migration makes database readiness fail. Without DATABASE_URL in development, the API uses temporary in-memory storage; those records disappear when the process stops.
 
-Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Migration 003 adds business profiles, branches, service catalogues, opening hours, service coverage and team invitations. Existing requests from before migration 002 have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
+Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Migration 003 adds business profiles, branches, service catalogues, opening hours, service coverage and team invitations. Migration 004 adds customer profiles and saved locations, service bookings, quote history, booking status events and in-app notifications. Existing requests from before migration 002 have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
 
 ### Authentication endpoints
 
@@ -119,6 +120,43 @@ Service prices use the priceMinor field, the smallest currency unit (for example
 
 There is no email delivery provider configured yet. Creating a team invitation returns its raw invitation token once in the API response with a pending-delivery notice. Share it privately; do not place it in logs, public messages or screenshots.
 
+### Customer marketplace and booking endpoints
+
+Public service discovery does not require an account. Customer profile, address and booking routes require a signed-in customer account.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | /api/v1/market/services | Discover active services; filter by countryCode, city, category and search |
+| GET / PATCH | /api/v1/customer/profile | Read or update customer contact and locale preferences |
+| GET / POST | /api/v1/customer/locations | List or save private service addresses |
+| GET / PATCH / DELETE | /api/v1/customer/locations/:id | Read, edit or delete an address owned by the customer |
+| GET / POST | /api/v1/customer/bookings | List bookings or request a service |
+| GET | /api/v1/customer/bookings/:id | Retrieve one booking belonging to the customer |
+| GET | /api/v1/customer/bookings/:id/quotes | View quote history |
+| POST | /api/v1/customer/bookings/:id/quotes/:quoteId/response | Accept or decline a pending quote |
+| POST | /api/v1/customer/bookings/:id/cancel | Cancel an eligible booking |
+| GET | /api/v1/customer/bookings/:id/events | View booking status history |
+
+A booking request must include an active service, a future ISO-8601 start time and either a saved address or an inline service address. The API checks the selected business's active branch and listed service coverage. Address details are copied into the booking record so later edits to a saved customer location do not silently alter an existing booking.
+
+### Business booking and notification endpoints
+
+Business booking routes require the bearer token and X-SwiftServe-Business-Id header.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | /api/v1/business/bookings | List bookings for the selected business |
+| GET | /api/v1/business/bookings/:id | Retrieve a business-owned booking |
+| GET / POST | /api/v1/business/bookings/:id/quotes | View or issue a price quote |
+| PATCH | /api/v1/business/bookings/:id/status | Confirm, decline, cancel or progress a booking |
+| GET | /api/v1/business/bookings/:id/events | View booking status history |
+| GET | /api/v1/notifications | List notifications for the signed-in user |
+| PATCH | /api/v1/notifications/:id/read | Mark an owned notification as read |
+
+Quote values use amountMinor, the smallest unit of the booking currency (for example, kobo for NGN). Quotes expire after 72 hours by default unless the business provides a different expiry. Accepting a quote confirms the booking at the requested time. No payment is collected in this phase.
+
+The current booking lifecycle includes requested, quoted, confirmed, assigned, in_progress, completed, cancelled and declined. Provider assignment is not implemented yet, so the assigned state is reserved for a later provider-workflow phase.
+
 ### Health checks
 
 - /health reports process liveness.
@@ -128,14 +166,14 @@ The simple authentication throttle is process-local. Before horizontal scaling o
 
 ## CI
 
-The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies migrations, runs the API HTTP/unit tests and runs PostgreSQL integration tests for account/session persistence and business isolation. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
+The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies all migrations, runs API HTTP/unit regression tests and runs PostgreSQL integration tests for identity, business isolation, customer locations, service bookings, quotes and notifications. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
 
 ## Development roadmap
 
 1. Verify the stabilised API deployment and PostgreSQL integration.
 2. Complete identity and business isolation, including migration/integration tests, session lifecycle and operational hardening.
 3. Complete business operations, including staff invitation delivery, multiple-business switching and full operational reporting.
-4. Build customer discovery, booking, provider assignment and notifications.
+4. Complete customer discovery, booking, quote handling and notifications, then connect the Android customer experience.
 5. Add provider verification, payments, refunds, reviews and dispute workflows.
 6. Prepare one launch market at a time with appropriate country, privacy, tax and payment configuration.
 
