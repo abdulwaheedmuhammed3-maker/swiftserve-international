@@ -13,7 +13,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
 
   const envKeys = [
     'PAYSTACK_SECRET_KEY','PAYSTACK_WEBHOOK_SECRET','PAYSTACK_API_BASE_URL',
-    'PAYSTACK_CALLBACK_URL','SWIFTSERVE_ADMIN_API_KEY','SWIFTSERVE_PLATFORM_FEE_BPS'
+    'PAYSTACK_CALLBACK_URL','SWIFTSERVE_ADMIN_API_KEY','SWIFTSERVE_ADMIN_ACTOR_ID','SWIFTSERVE_PLATFORM_FEE_BPS'
   ];
   const previousEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
   const gatewayState = { reference: null, amount: null, currency: null, transferReference: null, transactionStatus: 'success', transferStatus: 'pending', transferCalls: 0 };
@@ -67,6 +67,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
   process.env.PAYSTACK_WEBHOOK_SECRET='swiftserve_mock_webhook_secret';
   process.env.PAYSTACK_API_BASE_URL='http://127.0.0.1:'+paystackMock.address().port;
   process.env.SWIFTSERVE_ADMIN_API_KEY='swiftserve-ci-admin-key';
+  process.env.SWIFTSERVE_ADMIN_ACTOR_ID='swiftserve-ci-admin';
   process.env.SWIFTSERVE_PLATFORM_FEE_BPS='1000';
 
   const { requestHandler } = await import('../src/app.js');
@@ -625,6 +626,40 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(payoutRetryWhilePending.status,202);
     assert.equal(payoutRetryWhilePending.body.data.status,'processing');
     assert.equal(gatewayState.transferCalls,1);
+
+    gatewayState.transferStatus='success';
+    const reconciliation=await call('/api/v1/admin/finance/reconciliation',{
+      method:'POST',
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'},
+      body:JSON.stringify({limit:20})
+    });
+    assert.equal(reconciliation.status,201);
+    assert.equal(reconciliation.body.data.run.status,'completed');
+    assert.equal(reconciliation.body.data.run.scannedCount,1);
+    assert.equal(reconciliation.body.data.run.updatedCount,1);
+    assert.equal(reconciliation.body.data.items[0].entityType,'payout');
+    assert.equal(reconciliation.body.data.items[0].outcome,'updated');
+
+    const reconciliationDetail=await call('/api/v1/admin/finance/reconciliation/'+reconciliation.body.data.run.id,{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(reconciliationDetail.status,200);
+    assert.equal(reconciliationDetail.body.data.items.length,1);
+    assert.equal(reconciliationDetail.body.data.items[0].providerStatus,'success');
+
+    const financeSummary=await call('/api/v1/admin/finance/summary',{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(financeSummary.status,200);
+    assert.equal(financeSummary.body.data.processing_payouts,0);
+
+    const auditLogs=await call('/api/v1/admin/audit-logs?limit=100',{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(auditLogs.status,200);
+    assert.ok(auditLogs.body.data.some(item=>item.action==='finance.payout.transfer_requested'));
+    assert.ok(auditLogs.body.data.some(item=>item.action==='finance.reconciliation.completed'));
+    assert.ok(auditLogs.body.data.every(item=>item.actorKeyId==='swiftserve-ci-admin'));
 
     const transferWebhook=await sendPaystackWebhook({
       event:'transfer.success',
