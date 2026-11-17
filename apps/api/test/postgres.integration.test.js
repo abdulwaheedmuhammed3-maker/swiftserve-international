@@ -236,6 +236,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(booking.status, 201);
     assert.equal(booking.body.data.businessId, first.business.id);
     assert.equal(booking.body.data.status, 'requested');
+    assert.equal(booking.body.data.servicePriceMinor, 250000);
 
     const businessBookings = await call('/api/v1/business/bookings', {
       headers: first.headers
