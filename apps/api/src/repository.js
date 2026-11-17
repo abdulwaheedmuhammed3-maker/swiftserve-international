@@ -4,7 +4,7 @@ import pg from 'pg';
 const { Pool } = pg;
 const databaseUrl = process.env.DATABASE_URL?.trim();
 
-const pool = databaseUrl
+const pool = databaseUrl && process.env.NODE_ENV !== 'test'
   ? new Pool({
       connectionString: databaseUrl,
       connectionTimeoutMillis: 8000,
