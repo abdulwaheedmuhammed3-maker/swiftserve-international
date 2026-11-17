@@ -17,7 +17,9 @@ Never paste database credentials into chat, commit them to GitHub, or place them
 - [x] Business profile fields, branches, catalogue, hours, service areas and invitations.
 - [x] Customer profiles, saved locations, bookings, quotes, status events and notifications.
 - [x] Business-scoped service-request and booking reads and writes.
-- [ ] Apply migrations 001–004 to the actual development database.
+- [x] Provider profiles, skills, coverage areas, weekly availability and business links.
+- [x] Provider invitation, verification review and booking assignment tables.
+- [ ] Apply migrations 001–005 to the actual development database.
 - [x] Add an ordered migration runner with checksums and applied-migration history.
 - [x] Add PostgreSQL integration tests for accounts, sessions and business isolation in CI.
 - [ ] Verify records survive API restarts.
@@ -91,6 +93,27 @@ Composite foreign keys enforce that the service and branch belong to the same bu
 
 The current schema has no payment intent or provider assignment table yet. No payment is collected by the current booking flow. It also does not implement a slot-capacity ledger; business opening hours and coverage areas are used for validation, but simultaneous booking conflicts require a later availability/capacity phase.
 
+## Provider operations data model
+
+Migration 005 adds:
+
+- provider_profiles: provider display/contact details, home country, time zone, onboarding status and manual verification status;
+- provider_skills: supported service categories and years of experience;
+- provider_service_areas: country, region, city and postal-code-prefix coverage;
+- provider_availability: one weekly availability window per day in the provider's time zone;
+- business_provider_memberships: the provider's active/inactive link to a business;
+- provider_invitations: expiring business invitations stored by token hash;
+- booking_assignments: provider offer/accept/decline/cancel/completion state, schedule, business/booking/provider membership references;
+- provider_status_events: provider verification and review-state history.
+
+A booking assignment has composite foreign keys to its booking and business-provider membership. PostgreSQL enforces one active offer/accepted assignment per booking. The API serializes assignment creation per provider and rejects time overlaps for offered or accepted jobs.
+
+The assignment API verifies active business membership, provider verification/onboarding state, service skill, coverage area and weekly availability in the provider's configured time zone. This is not a full provider capacity engine: travel time, job buffers, business slot capacity, rescheduling and multi-day/overnight schedules are not implemented.
+
+Provider verification currently records a manual review decision. No identity-document file storage, biometric checks, background-check vendor or automated KYC integration is implemented. The admin review route uses the SWIFTSERVE_ADMIN_API_KEY secret as an initial administrative gate; a full admin user/role and review audit identity system remains future work.
+
+Provider invitations store token hashes. As no outbound email provider is connected, the raw token is returned once to the business user for private sharing. Acceptance requires a signed-in provider account whose email matches the invitation.
+
 ## Existing data and backfill
 
 Migration 002 deliberately adds nullable business ownership columns to existing service_requests. It does not automatically assign old requests to a new business. Requests with NULL business_id are not visible in the authenticated business API.
@@ -102,10 +125,12 @@ Before retaining old records, identify their true owner and use a reviewed, audi
 1. Create a development PostgreSQL database with your chosen managed provider.
 2. Copy apps/api/.env.example to apps/api/.env.
 3. Set DATABASE_URL in the local environment. Do not commit the .env file.
-4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001–004 in order.
+4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001–005 in order.
 5. Start the API and open /readyz. It should report PostgreSQL storage when the connection succeeds.
 6. Register a test business, create a service, branch and coverage area; register a test customer, save an address and request a booking.
-7. Issue and accept a test quote, then verify the booking, status history and notifications remain after restarting the API.
+7. Register a provider, add skills, areas and availability, submit for review and approve using the configured admin secret.
+8. Invite the provider to the business, accept the invitation, assign a confirmed booking and complete the provider workflow.
+9. Restart the API and verify the customer booking, provider profile, assignment history and notifications remain.
 
 For deployment, add DATABASE_URL as a secret environment variable in the hosting provider. Do not put it in frontend code, a GitHub source file or a public CI log.
 
@@ -118,8 +143,8 @@ Use the connection string format recommended by Supabase for the hosting environ
 - Create a least-privilege database role for the API.
 - Keep development and production databases separate.
 - Enable automated backups and test restoration.
-- Run the migration runner and verify all four schema versions against the actual development database.
-- Verify customer address ownership, booking isolation, quote lifecycle and notifications against the deployed PostgreSQL environment.
+- Run the migration runner and verify all five schema versions against the actual development database.
+- Verify customer address ownership, booking isolation, quote lifecycle, provider verification, invitations, assignment authorization and schedule conflicts against the deployed PostgreSQL environment.
 - Enforce business ownership in every read and write query.
 - Establish data minimization, retention and deletion practices.
 - Review session expiry, revocation and device token storage.
