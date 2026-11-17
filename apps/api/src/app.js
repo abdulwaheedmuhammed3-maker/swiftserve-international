@@ -610,7 +610,7 @@ export async function requestHandler(req, res) {
 
   if (url.pathname === '/api/v1/business/reviews' ||
       url.pathname === '/api/v1/business/disputes' ||
-      /^\/api\/v1\/business\/bookings\/[^/]+\/(?:refunds|dispute)$/.test(url.pathname) ||
+      /^\/api\/v1\/business\/bookings\/[^/]+\/(?:payments|refunds|dispute)$/.test(url.pathname) ||
       /^\/api\/v1\/business\/disputes\/[^/]+\/messages$/.test(url.pathname)) {
     try {
       const authenticated = await authenticateRequest(req);
