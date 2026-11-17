@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import pg from 'pg';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
@@ -10,6 +10,64 @@ const hasTestDatabase = typeof testDatabaseUrl === 'string' && testDatabaseUrl.l
 test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDatabase }, async () => {
   process.env.NODE_ENV = 'integration';
   process.env.DATABASE_URL = testDatabaseUrl;
+
+  const envKeys = [
+    'PAYSTACK_SECRET_KEY','PAYSTACK_WEBHOOK_SECRET','PAYSTACK_API_BASE_URL',
+    'PAYSTACK_CALLBACK_URL','SWIFTSERVE_ADMIN_API_KEY','SWIFTSERVE_PLATFORM_FEE_BPS'
+  ];
+  const previousEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+  const gatewayState = { reference: null, amount: null, currency: null, transferReference: null, transactionStatus: 'success', transferStatus: 'pending', transferCalls: 0 };
+  const paystackMock = http.createServer(async (req,res) => {
+    const chunks=[];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw=Buffer.concat(chunks).toString('utf8');
+    let body={};
+    try { body=raw?JSON.parse(raw):{}; } catch {}
+    const send=(data,statusCode=200) => {
+      const payload=JSON.stringify({status:true,message:'Mock gateway response',data});
+      res.writeHead(statusCode,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});
+      res.end(payload);
+    };
+    if(req.method==='POST'&&req.url==='/transaction/initialize'){
+      gatewayState.reference=body.reference;
+      gatewayState.amount=Number(body.amount);
+      gatewayState.currency=body.currency;
+      return send({authorization_url:'https://checkout.paystack.test/mock-session',access_code:'mock_access_code',reference:body.reference});
+    }
+    if(req.method==='GET'&&req.url?.startsWith('/transaction/verify/')){
+      const reference=decodeURIComponent(req.url.slice('/transaction/verify/'.length));
+      return send({
+        id:987654321,status:gatewayState.transactionStatus,reference,
+        amount:gatewayState.amount,currency:gatewayState.currency,
+        paid_at:new Date().toISOString()
+      });
+    }
+    if(req.method==='POST'&&req.url==='/transferrecipient'){
+      return send({
+        recipient_code:'RCP_MOCK_PROVIDER_01',name:body.name,
+        details:{bank_name:'Mock Nigerian Bank',account_number:'******6789'}
+      });
+    }
+    if(req.method==='POST'&&req.url==='/refund'){
+      return send({id:7654321,status:'pending',reference:body.reference,amount:body.amount,currency:body.currency});
+    }
+    if(req.method==='GET'&&req.url?.startsWith('/transfer/verify/')){
+      const reference=decodeURIComponent(req.url.slice('/transfer/verify/'.length));
+      return send({id:123456789,transfer_code:'TRF_MOCK_PROVIDER_01',status:gatewayState.transferStatus,reference});
+    }
+    if(req.method==='POST'&&req.url==='/transfer'){
+      gatewayState.transferReference=body.reference;
+      gatewayState.transferCalls+=1;
+      return send({id:123456789,transfer_code:'TRF_MOCK_PROVIDER_01',status:'pending',reference:body.reference});
+    }
+    return send({message:'Unexpected mock Paystack route: '+req.method+' '+req.url},404);
+  });
+  await new Promise(resolve => paystackMock.listen(0,'127.0.0.1',resolve));
+  process.env.PAYSTACK_SECRET_KEY='sk_test_swiftserve_mock_only';
+  process.env.PAYSTACK_WEBHOOK_SECRET='swiftserve_mock_webhook_secret';
+  process.env.PAYSTACK_API_BASE_URL='http://127.0.0.1:'+paystackMock.address().port;
+  process.env.SWIFTSERVE_ADMIN_API_KEY='swiftserve-ci-admin-key';
+  process.env.SWIFTSERVE_PLATFORM_FEE_BPS='1000';
 
   const { requestHandler } = await import('../src/app.js');
   const { closeDatabase } = await import('../src/repository.js');
@@ -35,6 +93,23 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
       headers: response.headers,
       body: raw ? JSON.parse(raw) : null
     };
+  }
+
+  async function sendPaystackWebhook(event) {
+    const raw=Buffer.from(JSON.stringify(event));
+    const timestamp=String(Math.floor(Date.now()/1000));
+    const signature=createHmac('sha512',process.env.PAYSTACK_WEBHOOK_SECRET)
+      .update(timestamp+'.').update(raw).digest('hex');
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/v1/webhooks/paystack',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Paystack-Signature':'t='+timestamp+',v1=ci:'+signature
+      },
+      body:raw
+    });
+    const text=await response.text();
+    return {status:response.status,body:text?JSON.parse(text):null,raw};
   }
 
   async function registerBusiness(label) {
@@ -272,6 +347,98 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(quoteAccepted.status, 200);
     assert.equal(quoteAccepted.body.data.status, 'confirmed');
 
+    const agreedBooking=await call('/api/v1/customer/bookings/'+booking.body.data.id,{
+      headers:customerHeaders
+    });
+    assert.equal(agreedBooking.status,200);
+    assert.equal(agreedBooking.body.data.servicePriceMinor,275000);
+
+    const idempotencyKey='swiftserve-payment-'+randomUUID();
+    const payment=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/payments',{
+      method:'POST',
+      headers:{...customerHeaders,'Idempotency-Key':idempotencyKey},
+      body:JSON.stringify({})
+    });
+    assert.equal(payment.status,201);
+    assert.equal(payment.body.data.status,'pending');
+    assert.equal(payment.body.data.amountMinor,275000);
+    assert.equal(payment.body.data.currencyCode,'NGN');
+    assert.equal(payment.body.data.authorizationUrl,'https://checkout.paystack.test/mock-session');
+
+    const paymentRetry=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/payments',{
+      method:'POST',
+      headers:{...customerHeaders,'Idempotency-Key':idempotencyKey},
+      body:JSON.stringify({})
+    });
+    assert.equal(paymentRetry.status,200);
+    assert.equal(paymentRetry.body.data.id,payment.body.data.id);
+
+    gatewayState.transactionStatus='pending';
+    const pendingPaymentVerification=await call('/api/v1/customer/payments/'+payment.body.data.id+'/verify',{
+      method:'POST',headers:customerHeaders
+    });
+    assert.equal(pendingPaymentVerification.status,202);
+    assert.equal(pendingPaymentVerification.body.data.status,'pending');
+    gatewayState.transactionStatus='success';
+    const verifiedPayment=await call('/api/v1/customer/payments/'+payment.body.data.id+'/verify',{
+      method:'POST',headers:customerHeaders
+    });
+    assert.equal(verifiedPayment.status,200);
+    assert.equal(verifiedPayment.body.data.status,'succeeded');
+    assert.equal(verifiedPayment.body.data.amountMinor,275000);
+
+    const savedPaystackSecret=process.env.PAYSTACK_SECRET_KEY;
+    delete process.env.PAYSTACK_SECRET_KEY;
+    const paymentHistory=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/payments',{
+      headers:customerHeaders
+    });
+    process.env.PAYSTACK_SECRET_KEY=savedPaystackSecret;
+    assert.equal(paymentHistory.status,200);
+    assert.equal(paymentHistory.body.data.length,1);
+
+    const businessPaymentView=await call('/api/v1/business/bookings/'+booking.body.data.id+'/payments',{
+      headers:first.headers
+    });
+    assert.equal(businessPaymentView.status,200);
+    assert.equal(businessPaymentView.body.data[0].amountMinor,275000);
+
+    const refund=await call('/api/v1/business/bookings/'+booking.body.data.id+'/refunds',{
+      method:'POST',
+      headers:first.headers,
+      body:JSON.stringify({
+        amountMinor:25000,
+        customerNote:'Partial refund requested for a material adjustment.',
+        merchantNote:'Approved partial refund in integration test.'
+      })
+    });
+    assert.equal(refund.status,201);
+    assert.equal(refund.body.data.status,'pending');
+    assert.equal(refund.body.data.amountMinor,25000);
+
+    const refundEvent={
+      event:'refund.processed',
+      data:{
+        id:7654321,
+        reference:refund.body.data.reference,
+        status:'processed',
+        amount:25000,
+        currency:'NGN'
+      }
+    };
+    const [refundWebhook,duplicateRefundWebhook]=await Promise.all([
+      sendPaystackWebhook(refundEvent),sendPaystackWebhook(refundEvent)
+    ]);
+    assert.equal(refundWebhook.status,200);
+    assert.equal(duplicateRefundWebhook.status,200);
+    assert.equal([refundWebhook,duplicateRefundWebhook].filter(item=>item.body?.received===true&&item.body?.duplicate!==true).length,1);
+    assert.equal([refundWebhook,duplicateRefundWebhook].filter(item=>item.body?.duplicate===true).length,1);
+
+    const refundList=await call('/api/v1/business/bookings/'+booking.body.data.id+'/refunds',{
+      headers:first.headers
+    });
+    assert.equal(refundList.status,200);
+    assert.equal(refundList.body.data[0].status,'processed');
+
     const providerEmail = 'integration-provider-' + randomUUID() + '@example.test';
     const providerRegistration = await call('/api/v1/auth/register', {
       method: 'POST',
@@ -351,6 +518,21 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     });
     assert.equal(verified.status, 200);
     assert.equal(verified.body.data.verificationStatus, 'verified');
+
+    const payoutAccount=await call('/api/v1/provider/payout-account',{
+      method:'POST',
+      headers:providerHeaders,
+      body:JSON.stringify({
+        accountName:'Integration Provider',
+        accountNumber:'0123456789',
+        bankCode:'058',
+        currencyCode:'NGN'
+      })
+    });
+    assert.equal(payoutAccount.status,201);
+    assert.equal(payoutAccount.body.data.lastFour,'6789');
+    assert.equal(Object.prototype.hasOwnProperty.call(payoutAccount.body.data,'accountNumber'),false);
+
     if (previousAdminKey === undefined) delete process.env.SWIFTSERVE_ADMIN_API_KEY;
     else process.env.SWIFTSERVE_ADMIN_API_KEY = previousAdminKey;
 
@@ -419,6 +601,141 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(providerCompleted.status, 200);
     assert.equal(providerCompleted.body.data.status, 'completed');
 
+    const adminPayouts=await call('/api/v1/admin/payouts/pending',{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(adminPayouts.status,200);
+    const payout=adminPayouts.body.data.find(item=>item.bookingId===booking.body.data.id);
+    assert.ok(payout);
+    assert.equal(payout.grossAmountMinor,250000);
+    assert.equal(payout.platformFeeMinor,25000);
+    assert.equal(payout.netAmountMinor,225000);
+    assert.equal(payout.status,'pending');
+
+    const payoutStarted=await call('/api/v1/admin/payouts/'+payout.id+'/process',{
+      method:'POST',
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(payoutStarted.status,202);
+    assert.equal(payoutStarted.body.data.status,'processing');
+    assert.equal(payoutStarted.body.data.transferReference,gatewayState.transferReference);
+    const payoutRetryWhilePending=await call('/api/v1/admin/payouts/'+payout.id+'/process',{
+      method:'POST',headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(payoutRetryWhilePending.status,202);
+    assert.equal(payoutRetryWhilePending.body.data.status,'processing');
+    assert.equal(gatewayState.transferCalls,1);
+
+    const transferWebhook=await sendPaystackWebhook({
+      event:'transfer.success',
+      data:{
+        id:123456789,
+        reference:gatewayState.transferReference,
+        status:'success',
+        amount:225000,
+        currency:'NGN'
+      }
+    });
+    assert.equal(transferWebhook.status,200);
+    assert.equal(transferWebhook.body.received,true);
+
+    const duplicateTransferWebhook=await sendPaystackWebhook({
+      event:'transfer.success',
+      data:{
+        id:123456789,
+        reference:gatewayState.transferReference,
+        status:'success',
+        amount:225000,
+        currency:'NGN'
+      }
+    });
+    assert.equal(duplicateTransferWebhook.status,200);
+    assert.equal(duplicateTransferWebhook.body.duplicate,true);
+
+    const providerPayouts=await call('/api/v1/provider/payouts',{headers:providerHeaders});
+    assert.equal(providerPayouts.status,200);
+    assert.equal(providerPayouts.body.data[0].status,'paid');
+    assert.equal(providerPayouts.body.data[0].netAmountMinor,225000);
+
+    const refundAfterPayout=await call('/api/v1/business/bookings/'+booking.body.data.id+'/refunds',{
+      method:'POST',
+      headers:first.headers,
+      body:JSON.stringify({amountMinor:10000,customerNote:'Regression test after provider payout.'})
+    });
+    assert.equal(refundAfterPayout.status,409);
+    assert.equal(refundAfterPayout.body.error.code,'REFUND_NOT_AVAILABLE');
+
+    const review=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/review',{
+      method:'POST',
+      headers:customerHeaders,
+      body:JSON.stringify({rating:5,comment:'The work was completed as agreed.'})
+    });
+    assert.equal(review.status,201);
+    assert.equal(review.body.data.rating,5);
+
+    const businessReviews=await call('/api/v1/business/reviews',{headers:first.headers});
+    assert.equal(businessReviews.status,200);
+    assert.ok(businessReviews.body.data.some(item=>item.bookingId===booking.body.data.id));
+    const providerReviews=await call('/api/v1/provider/reviews',{headers:providerHeaders});
+    assert.equal(providerReviews.status,200);
+    assert.ok(providerReviews.body.data.some(item=>item.bookingId===booking.body.data.id));
+
+    const dispute=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/disputes',{
+      method:'POST',
+      headers:customerHeaders,
+      body:JSON.stringify({
+        category:'service_quality',
+        description:'The customer wants a follow-up review of one part of the finished service.',
+        requestedResolution:'refund_partial'
+      })
+    });
+    assert.equal(dispute.status,201);
+    assert.equal(dispute.body.data.status,'open');
+
+    const customerDispute=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/disputes',{
+      headers:customerHeaders
+    });
+    assert.equal(customerDispute.status,200);
+    assert.equal(customerDispute.body.data.id,dispute.body.data.id);
+
+    const customerDisputeMessages=await call('/api/v1/customer/disputes/'+dispute.body.data.id+'/messages',{
+      headers:customerHeaders
+    });
+    assert.equal(customerDisputeMessages.status,200);
+    assert.equal(customerDisputeMessages.body.data.length,1);
+
+    const businessDisputeMessage=await call('/api/v1/business/disputes/'+dispute.body.data.id+'/messages',{
+      method:'POST',
+      headers:first.headers,
+      body:JSON.stringify({message:'We have reviewed the service notes and will investigate.'})
+    });
+    assert.equal(businessDisputeMessage.status,201);
+
+    const customerFollowup=await call('/api/v1/customer/disputes/'+dispute.body.data.id+'/messages',{
+      method:'POST',
+      headers:customerHeaders,
+      body:JSON.stringify({message:'Thank you. Please confirm the proposed resolution.'})
+    });
+    assert.equal(customerFollowup.status,201);
+
+    const adminDisputes=await call('/api/v1/admin/disputes/pending',{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(adminDisputes.status,200);
+    assert.ok(adminDisputes.body.data.some(item=>item.id===dispute.body.data.id));
+
+    const resolvedDispute=await call('/api/v1/admin/disputes/'+dispute.body.data.id,{
+      method:'PATCH',
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'},
+      body:JSON.stringify({
+        status:'resolved',
+        resolution:'refund_partial',
+        note:'The partial refund has been recorded and the issue is closed.'
+      })
+    });
+    assert.equal(resolvedDispute.status,200);
+    assert.equal(resolvedDispute.body.data.status,'resolved');
+
     const finalBooking = await call('/api/v1/customer/bookings/' + booking.body.data.id, {
       headers: customerHeaders
     });
@@ -469,7 +786,18 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
   } finally {
     server.closeAllConnections?.();
     await new Promise(resolve => server.close(resolve));
+    paystackMock.closeAllConnections?.();
+    await new Promise(resolve => paystackMock.close(resolve));
     if (businessIds.length) {
+      await pool.query('DELETE FROM dispute_messages WHERE dispute_id IN (SELECT id FROM disputes WHERE business_id=ANY($1::uuid[]))',[businessIds]);
+      await pool.query('DELETE FROM dispute_events WHERE dispute_id IN (SELECT id FROM disputes WHERE business_id=ANY($1::uuid[]))',[businessIds]);
+      await pool.query('DELETE FROM disputes WHERE business_id=ANY($1::uuid[])',[businessIds]);
+      await pool.query('DELETE FROM booking_reviews WHERE business_id=ANY($1::uuid[])',[businessIds]);
+      await pool.query('DELETE FROM refunds WHERE business_id=ANY($1::uuid[])',[businessIds]);
+      await pool.query('DELETE FROM provider_payout_events WHERE payout_id IN (SELECT id FROM provider_payouts WHERE business_id=ANY($1::uuid[]))',[businessIds]);
+      await pool.query('DELETE FROM provider_payouts WHERE business_id=ANY($1::uuid[])',[businessIds]);
+      await pool.query('DELETE FROM payment_events WHERE payment_intent_id IN (SELECT id FROM payment_intents WHERE business_id=ANY($1::uuid[]))',[businessIds]);
+      await pool.query('DELETE FROM payment_intents WHERE business_id=ANY($1::uuid[])',[businessIds]);
       await pool.query('DELETE FROM bookings WHERE business_id = ANY($1::uuid[])', [businessIds]);
       await pool.query('DELETE FROM service_requests WHERE business_id = ANY($1::uuid[])', [businessIds]);
       await pool.query('DELETE FROM businesses WHERE id = ANY($1::uuid[])', [businessIds]);
@@ -479,5 +807,9 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     }
     await pool.end();
     await closeDatabase();
+    for(const key of envKeys){
+      if(previousEnv[key]===undefined)delete process.env[key];
+      else process.env[key]=previousEnv[key];
+    }
   }
 });

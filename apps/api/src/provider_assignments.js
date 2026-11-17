@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { queryDatabase, withDatabaseTransaction } from './repository.js';
 import { getProviderAssignmentReadiness } from './provider_resources.js';
+import { createOrRefreshPayoutForCompletedAssignment } from './finance_resources.js';
 
 const assignments=new Map();
 
@@ -205,6 +206,24 @@ export async function respondProviderAssignment(providerUserId,bookingId,action,
   return {status:item.status};
 }
 
+export async function getCompletedAssignmentForBooking(bookingId){
+  const result=await queryDatabase(
+    "SELECT a.id,a.business_id,a.booking_id,a.provider_user_id,b.currency_code FROM booking_assignments a JOIN bookings b ON b.id=a.booking_id AND b.business_id=a.business_id WHERE a.booking_id=$1 AND a.status='completed' ORDER BY a.completed_at DESC NULLS LAST LIMIT 1",
+    [bookingId]
+  );
+  if(result)return result.rows[0]?{
+    id:result.rows[0].id,businessId:result.rows[0].business_id,
+    bookingId:result.rows[0].booking_id,providerUserId:result.rows[0].provider_user_id,
+    currencyCode:result.rows[0].currency_code
+  }:null;
+  const item=[...assignments.values()].find(row=>row.bookingId===bookingId&&row.status==='completed');
+  if(!item)return null;
+  return {
+    id:item.id,businessId:item.businessId,bookingId:item.bookingId,
+    providerUserId:item.providerUserId,currencyCode:item.bookingRef?.currencyCode||'NGN'
+  };
+}
+
 export async function updateProviderBookingStatus(providerUserId,bookingId,nextStatus,note=null){
   if(!['in_progress','completed'].includes(nextStatus))return null;
   const result=await withDatabaseTransaction(async client=>{
@@ -227,7 +246,11 @@ export async function updateProviderBookingStatus(providerUserId,bookingId,nextS
     await client.query("INSERT INTO notifications (user_id,notification_type,title,body,resource_type,resource_id) SELECT customer_user_id,'provider_booking_update','Service progress update','Your service booking is now ' || $3 || '.','booking',id FROM bookings WHERE id=$1 AND business_id=$2",[bookingId,row.business_id,nextStatus]);
     return {status:nextStatus};
   });
-  if(result!==null)return result.invalid?null:result;
+  if(result!==null){
+    if(result.invalid)return null;
+    if(nextStatus==='completed')await createOrRefreshPayoutForCompletedAssignment(bookingId);
+    return result;
+  }
   const item=[...assignments.values()].find(row=>row.providerUserId===providerUserId&&row.bookingId===bookingId&&row.status==='accepted');
   if(!item||!item.bookingRef)return null;
   const booking=item.bookingRef;
@@ -237,6 +260,12 @@ export async function updateProviderBookingStatus(providerUserId,bookingId,nextS
     booking.status='completed';item.status='completed';item.completedAt=new Date().toISOString();item.responseNote=note;
   }else return null;
   assignments.set(item.id,item);
+  if(nextStatus==='completed'){
+    await createOrRefreshPayoutForCompletedAssignment(bookingId,{
+      id:item.id,businessId:item.businessId,bookingId:item.bookingId,
+      providerUserId:item.providerUserId,currencyCode:item.bookingRef.currencyCode
+    });
+  }
   return {status:nextStatus};
 }
 

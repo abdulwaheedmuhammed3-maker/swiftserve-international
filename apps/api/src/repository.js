@@ -96,7 +96,18 @@ export async function checkDatabase() {
     "to_regclass('public.business_provider_memberships') AS business_provider_memberships, " +
     "to_regclass('public.provider_invitations') AS provider_invitations, " +
     "to_regclass('public.booking_assignments') AS booking_assignments, " +
-    "to_regclass('public.provider_status_events') AS provider_status_events"
+    "to_regclass('public.provider_status_events') AS provider_status_events, " +
+    "to_regclass('public.payment_intents') AS payment_intents, " +
+    "to_regclass('public.payment_events') AS payment_events, " +
+    "to_regclass('public.provider_webhook_events') AS provider_webhook_events, " +
+    "to_regclass('public.refunds') AS refunds, " +
+    "to_regclass('public.provider_payout_accounts') AS provider_payout_accounts, " +
+    "to_regclass('public.provider_payouts') AS provider_payouts, " +
+    "to_regclass('public.provider_payout_events') AS provider_payout_events, " +
+    "to_regclass('public.booking_reviews') AS booking_reviews, " +
+    "to_regclass('public.disputes') AS disputes, " +
+    "to_regclass('public.dispute_messages') AS dispute_messages, " +
+    "to_regclass('public.dispute_events') AS dispute_events"
   );
 
   const row = schema.rows[0] || {};
@@ -104,7 +115,10 @@ export async function checkDatabase() {
     'business_branches', 'business_services', 'business_hours', 'business_service_areas', 'business_invitations',
     'customer_profiles', 'customer_locations', 'bookings', 'booking_quotes', 'booking_status_events', 'notifications',
     'provider_profiles', 'provider_skills', 'provider_service_areas', 'provider_availability',
-    'business_provider_memberships', 'provider_invitations', 'booking_assignments', 'provider_status_events'];
+    'business_provider_memberships', 'provider_invitations', 'booking_assignments', 'provider_status_events',
+    'payment_intents', 'payment_events', 'provider_webhook_events', 'refunds',
+    'provider_payout_accounts', 'provider_payouts', 'provider_payout_events',
+    'booking_reviews', 'disputes', 'dispute_messages', 'dispute_events'];
   const missingTables = requiredTables.filter(name => !row[name]);
 
   if (missingTables.length) {
@@ -120,7 +134,8 @@ export async function checkDatabase() {
     '002_identity_business_scope.sql',
     '003_business_operations.sql',
     '004_customer_bookings.sql',
-    '005_provider_operations.sql'
+    '005_provider_operations.sql',
+    '006_finance_reviews_disputes.sql'
   ];
   const missingMigrations = requiredMigrations.filter(version => !applied.has(version));
 

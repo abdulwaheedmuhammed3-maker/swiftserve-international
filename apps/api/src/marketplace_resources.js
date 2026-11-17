@@ -400,12 +400,12 @@ export async function respondToBookingQuote(userId,bookingId,quoteId,action) {
   const nextQuote=action==='accept'?'accepted':'declined';
   const nextBooking=action==='accept'?'confirmed':'requested';
   const result=await withDatabaseTransaction(async client=>{
-    const selected=await client.query("SELECT b.business_id,b.status,q.status AS quote_status,q.expires_at FROM bookings b JOIN booking_quotes q ON q.booking_id=b.id AND q.business_id=b.business_id WHERE b.id=$1 AND b.customer_user_id=$2 AND q.id=$3 FOR UPDATE OF b,q",[bookingId,userId,quoteId]);
+    const selected=await client.query("SELECT b.business_id,b.status,q.status AS quote_status,q.expires_at,q.amount_minor FROM bookings b JOIN booking_quotes q ON q.booking_id=b.id AND q.business_id=b.business_id WHERE b.id=$1 AND b.customer_user_id=$2 AND q.id=$3 FOR UPDATE OF b,q",[bookingId,userId,quoteId]);
     const row=selected.rows[0];
     if (!row||row.status!=='quoted'||row.quote_status!=='pending'||new Date(row.expires_at)<=new Date()) return {missing:true};
     if (!['accept','decline'].includes(action)) return {missing:true};
     await client.query('UPDATE booking_quotes SET status=$3,responded_at=now() WHERE id=$1 AND business_id=$2',[quoteId,row.business_id,nextQuote]);
-    await client.query("UPDATE bookings SET status=$3,confirmed_start_at=CASE WHEN $3='confirmed' THEN requested_start_at ELSE confirmed_start_at END,confirmed_end_at=CASE WHEN $3='confirmed' THEN requested_end_at ELSE confirmed_end_at END,updated_at=now() WHERE id=$1 AND business_id=$2",[bookingId,row.business_id,nextBooking]);
+    await client.query("UPDATE bookings SET status=$3,service_price_minor_snapshot=CASE WHEN $3='confirmed' THEN $4 ELSE service_price_minor_snapshot END,confirmed_start_at=CASE WHEN $3='confirmed' THEN requested_start_at ELSE confirmed_start_at END,confirmed_end_at=CASE WHEN $3='confirmed' THEN requested_end_at ELSE confirmed_end_at END,updated_at=now() WHERE id=$1 AND business_id=$2",[bookingId,row.business_id,nextBooking,Number(row.amount_minor)]);
     await client.query('INSERT INTO booking_status_events (business_id,booking_id,from_status,to_status,actor_user_id,note) VALUES ($1,$2,$3,$4,$5,$6)',[row.business_id,bookingId,row.status,nextBooking,userId,'Customer responded to quote.']);
     await client.query("INSERT INTO notifications (user_id,notification_type,title,body,resource_type,resource_id) SELECT bm.user_id,'booking_quote_response','Quote response received','The customer has responded to the quote.','booking',$1 FROM business_memberships bm WHERE bm.business_id=$2 AND bm.status='active'",[bookingId,row.business_id]);
     return {status:nextBooking};
@@ -419,6 +419,7 @@ export async function respondToBookingQuote(userId,bookingId,quoteId,action) {
   quotes.set(quoteId,quote);
   booking.status=nextBooking;
   if (action==='accept') {
+    booking.servicePriceMinor=Number(quote.amountMinor);
     booking.confirmedStartAt=booking.requestedStartAt;
     booking.confirmedEndAt=booking.requestedEndAt;
   }

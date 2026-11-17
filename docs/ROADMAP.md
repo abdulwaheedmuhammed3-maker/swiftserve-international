@@ -92,13 +92,16 @@ SwiftServe is being developed as an international household-services platform. T
 
 - [x] Add a protected manual provider verification review workflow.
 - [ ] Add provider identity evidence/document storage and stronger KYC review controls.
-- [ ] Integrate country-appropriate payment providers.
-- [ ] Add payment intents, transaction records, refunds and reconciliation.
-- [ ] Add reviews, ratings, reports and dispute handling.
-- [ ] Add support tools, audit trails and operational monitoring.
-- [ ] Test payment failures, retries, refunds and webhook idempotency.
+- [x] Integrate the first payment provider (Paystack) for customer checkout and Nigerian Naira provider bank payouts; international payment support is limited to Paystack's configured country/currency availability.
+- [x] Add payment intents, immutable amount/currency snapshots, transaction events, partial refunds and a provider payout ledger.
+- [x] Add booking reviews and customer/business disputes with messages and recorded resolutions.
+- [x] Verify Paystack webhook signatures, reserve webhook event keys atomically and ignore duplicate deliveries.
+- [x] Cover successful checkout, pending transaction verification, partial refund, payout initiation, pending-transfer verification and duplicate webhook delivery in PostgreSQL integration tests.
+- [ ] Add payment failure/abandonment, refund timeout/reconciliation and transfer failure/reversal test cases.
+- [ ] Add support-agent tooling, full admin-user audit identity and operational monitoring.
+- [ ] Complete live Paystack test-mode verification and reconcile real gateway events before a pilot.
 
-**Exit condition:** the platform can safely support a real pilot with clear financial and dispute records.
+**Exit condition:** the platform can safely support a real pilot with clear financial and dispute records. Passing CI does not mean live payments, bank transfers, provider KYC or production operations have been verified.
 
 ## Stage 5 — Pilot, pricing and market expansion
 

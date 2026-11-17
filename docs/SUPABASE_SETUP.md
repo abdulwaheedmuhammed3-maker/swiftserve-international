@@ -37,6 +37,7 @@ The current migration files are:
 3. apps/api/db/migrations/003_business_operations.sql
 4. apps/api/db/migrations/004_customer_bookings.sql
 5. apps/api/db/migrations/005_provider_operations.sql
+6. apps/api/db/migrations/006_finance_reviews_disputes.sql
 
 For Render, configure the start command to run migrations before the server:
 
@@ -61,12 +62,12 @@ A successful /health response alone does not prove PostgreSQL is ready. Use /rea
 
 ## 5. CI integration tests
 
-GitHub Actions runs a temporary PostgreSQL 16 database, applies migrations 001–005, and tests account persistence, session revocation, business isolation, customer locations, service bookings, quotes, notifications, provider verification, invitations and booking assignments. This automated integration suite does not replace verifying your own Supabase project and Render deployment.
+GitHub Actions runs a temporary PostgreSQL 16 database, applies migrations 001–006, and tests account persistence, session revocation, business isolation, customer locations, service bookings, quotes, notifications, provider verification, invitations, booking assignments, Paystack checkout/verification, partial refunds, payout transfers, reviews and dispute resolution against a local mock gateway. This automated integration suite does not replace verifying your own Supabase project, live Paystack test account and Render deployment.
 
 ## 6. Important limitations
 
 Migration 002 adds nullable ownership columns to existing service requests. Older requests are not automatically assigned to a business and remain hidden from authenticated business request endpoints until their ownership is reviewed and backfilled deliberately.
 
-The platform is not production-ready. Customer discovery, saved locations, booking requests, quotes and in-app notifications exist in the API. Provider profiles, skills, coverage, weekly availability, manual verification review, business linking and booking assignment now exist in the API, but provider/customer Android experiences, identity-document upload and automated KYC, payment collection/refunds, reviews, disputes, complete slot-capacity controls and automated email/SMS/push delivery remain incomplete. Provider verification currently requires an explicit manual review using the protected admin API key; it is not an automated identity check.
+The platform is not production-ready. Customer discovery, saved locations, booking requests, quotes and in-app notifications exist in the API. Provider profiles, skills, coverage, weekly availability, manual verification review, business linking and booking assignment now exist in the API, but provider/customer Android experiences, identity-document upload and automated KYC, live Paystack merchant/webhook verification, multi-country payout support, automated payout scheduling, complete slot-capacity controls, evidence uploads and automated email/SMS/push delivery remain incomplete. Provider verification currently requires an explicit manual review using the protected admin API key; it is not an automated identity check.
 
 Before a pilot, configure a least-privilege database role, TLS, separate development and production environments, automated backups and restore tests, privacy and retention procedures. Rotate the database password immediately if it is accidentally exposed.

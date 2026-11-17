@@ -19,7 +19,8 @@ Never paste database credentials into chat, commit them to GitHub, or place them
 - [x] Business-scoped service-request and booking reads and writes.
 - [x] Provider profiles, skills, coverage areas, weekly availability and business links.
 - [x] Provider invitation, verification review and booking assignment tables.
-- [ ] Apply migrations 001–005 to the actual development database.
+- [x] Payment intents/events, refunds, provider payout accounts/ledger, reviews and disputes.
+- [ ] Apply migrations 001–006 to the actual development database.
 - [x] Add an ordered migration runner with checksums and applied-migration history.
 - [x] Add PostgreSQL integration tests for accounts, sessions and business isolation in CI.
 - [ ] Verify records survive API restarts.
@@ -114,6 +115,26 @@ Provider verification currently records a manual review decision. No identity-do
 
 Provider invitations store token hashes. As no outbound email provider is connected, the raw token is returned once to the business user for private sharing. Acceptance requires a signed-in provider account whose email matches the invitation.
 
+## Finance, reviews and disputes data model
+
+Migration 006 adds the first financial and trust records:
+
+- payment_intents: one customer payment attempt tied to the booking/business, with amount/currency snapshots, Paystack reference, idempotency key and payment status;
+- payment_events and provider_webhook_events: verified gateway-event history and duplicate-delivery keys;
+- refunds: full/partial refund requests tied to a payment intent and booking, including requester, amount, gateway reference and processing state;
+- provider_payout_accounts: Paystack recipient code and masked account metadata. SwiftServe does not persist the full bank account number;
+- provider_payouts and provider_payout_events: gross amount, platform fee, provider net amount, transfer reference, status and status history;
+- booking_reviews: one customer review per completed booking, associated with the assigned provider when available;
+- disputes, dispute_messages and dispute_events: customer/business dispute records, conversation messages and resolution history.
+
+Payment intents are created only for confirmed bookings, and their amount is taken from the confirmed booking price snapshot. Accepting a quote first copies its amount into that snapshot. A payment is marked successful only after the server verifies the Paystack transaction reference, amount, currency and success status.
+
+Refund totals are accounted for before a provider payout is calculated. The payout ledger is generated after a provider assignment is completed and a verified booking payment exists. A refund that has processed reduces the payout gross; the platform fee is calculated using SWIFTSERVE_PLATFORM_FEE_BPS. The setting defaults to zero and is capped at 5,000 basis points (50%). The default is intentionally zero until commercial terms are decided.
+
+Provider payout recipients currently support NGN NUBAN bank accounts. The API sends the full account number to Paystack over HTTPS during recipient creation and stores the Paystack recipient code plus masked account metadata. Provider transfers are manually initiated by an administrator; transfer events update the ledger. This is not an automated payout schedule or multi-country bank payout implementation.
+
+Reviews require a completed booking and a unique booking/customer pair. Disputes can be opened by the customer or business on eligible bookings and retain messages and resolution state. Recording a dispute resolution does not itself execute a refund; an authorized business user must submit a refund separately.
+
 ## Existing data and backfill
 
 Migration 002 deliberately adds nullable business ownership columns to existing service_requests. It does not automatically assign old requests to a new business. Requests with NULL business_id are not visible in the authenticated business API.
@@ -125,12 +146,13 @@ Before retaining old records, identify their true owner and use a reviewed, audi
 1. Create a development PostgreSQL database with your chosen managed provider.
 2. Copy apps/api/.env.example to apps/api/.env.
 3. Set DATABASE_URL in the local environment. Do not commit the .env file.
-4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001–005 in order.
+4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001–006 in order.
 5. Start the API and open /readyz. It should report PostgreSQL storage when the connection succeeds.
 6. Register a test business, create a service, branch and coverage area; register a test customer, save an address and request a booking.
 7. Register a provider, add skills, areas and availability, submit for review and approve using the configured admin secret.
 8. Invite the provider to the business, accept the invitation, assign a confirmed booking and complete the provider workflow.
-9. Restart the API and verify the customer booking, provider profile, assignment history and notifications remain.
+9. Configure Paystack test credentials and a local/non-production webhook, then verify checkout, partial refund and transfer events before using live credentials.
+10. Restart the API and verify bookings, payment/refund/payout records, reviews, disputes and notifications remain.
 
 For deployment, add DATABASE_URL as a secret environment variable in the hosting provider. Do not put it in frontend code, a GitHub source file or a public CI log.
 
@@ -143,8 +165,9 @@ Use the connection string format recommended by Supabase for the hosting environ
 - Create a least-privilege database role for the API.
 - Keep development and production databases separate.
 - Enable automated backups and test restoration.
-- Run the migration runner and verify all five schema versions against the actual development database.
+- Run the migration runner and verify all six schema versions against the actual development database.
 - Verify customer address ownership, booking isolation, quote lifecycle, provider verification, invitations, assignment authorization and schedule conflicts against the deployed PostgreSQL environment.
+- Complete a Paystack test-mode checkout, refund and transfer using the intended webhook configuration; reconcile the resulting gateway events and SwiftServe ledger.
 - Enforce business ownership in every read and write query.
 - Establish data minimization, retention and deletion practices.
 - Review session expiry, revocation and device token storage.

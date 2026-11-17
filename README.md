@@ -4,7 +4,7 @@
 
 SwiftServe is an international household-services platform, starting with a business-first workflow. It is designed to connect customers with service businesses and providers while giving businesses a workspace to manage requests and bookings.
 
-> **Development status:** the API now includes customer, business and provider accounts; business operations; service discovery; saved customer addresses; booking and quote workflows; provider onboarding, weekly availability, verification review, business invitations and booking assignment. This remains an MVP under active development, not a production-ready international marketplace. Provider document upload, automated email/SMS/push delivery, payments, refunds, reviews, disputes, Android customer/provider screens and real Supabase/Render deployment verification are still outstanding.
+> **Development status:** the API now includes customer, business and provider accounts; business operations; service discovery; booking/quote workflows; provider onboarding and assignment; Paystack payment intents and verification; refund records; provider payout accounting; reviews and disputes. This remains an MVP under active development, not a production-ready international marketplace. Provider identity-document upload, complete admin roles, email/SMS/push delivery, Android customer/provider screens and real Supabase/Render deployment verification remain outstanding.
 
 ## Repository structure
 
@@ -54,6 +54,7 @@ The current migrations are:
 3. apps/api/db/migrations/003_business_operations.sql
 4. apps/api/db/migrations/004_customer_bookings.sql
 5. apps/api/db/migrations/005_provider_operations.sql
+6. apps/api/db/migrations/006_finance_reviews_disputes.sql
 
 For Render, the API start command can run migrations before starting the server:
 
@@ -63,7 +64,7 @@ The server checks that the required migration records and tables exist before it
 
 Never commit .env files or real credentials. In production, DATABASE_URL is required and the API refuses to start without it. The server checks the configured database and required core tables before listening. A missing migration makes database readiness fail. Without DATABASE_URL in development, the API uses temporary in-memory storage; those records disappear when the process stops.
 
-Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Migration 003 adds business profiles, branches, service catalogues, opening hours, service coverage and team invitations. Migration 004 adds customer profiles and saved locations, service bookings, quote history, booking status events and in-app notifications. Migration 005 adds provider profiles, skills, service areas, weekly availability, business-provider memberships, provider invitations and booking assignments. Existing requests from before migration 002 have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
+Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Migration 003 adds business profiles, branches, service catalogues, opening hours, service coverage and team invitations. Migration 004 adds customer profiles and saved locations, service bookings, quote history, booking status events and in-app notifications. Migration 005 adds provider profiles, skills, service areas, weekly availability, business-provider memberships, provider invitations and booking assignments. Migration 006 adds payment intents/events, refunds, provider payout accounts and ledger entries, reviews and dispute records/messages/events. Existing requests from before migration 002 have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
 
 ### Authentication endpoints
 
@@ -197,6 +198,74 @@ Provider invitation delivery is not automated. The API returns the invitation to
 
 The admin key must never be committed to GitHub or placed in Android/mobile code. Provider identity-document file uploads and storage are not implemented in this phase; approval is an operational review flag, not automated identity verification.
 
+### Payments, refunds and provider payouts
+
+Online payment collection is implemented through a server-side Paystack adapter. No gateway keys are included in the repository. Configure these secrets in the API runtime before enabling payments:
+
+| Variable | Purpose |
+|---|---|
+| DATABASE_URL | PostgreSQL connection |
+| PAYSTACK_SECRET_KEY | Server-side Paystack secret key |
+| PAYSTACK_WEBHOOK_SECRET | Paystack webhook HMAC secret (or PAYSTACK_WEBHOOK_SECRETS for rotated keys) |
+| PAYSTACK_CALLBACK_URL | Optional checkout return URL |
+| SWIFTSERVE_ADMIN_API_KEY | Protected manual provider-review, payout and dispute administration |
+| SWIFTSERVE_PLATFORM_FEE_BPS | Platform fee in basis points; defaults to 0 and is capped at 5,000 (50%) |
+
+Never add gateway or admin secrets to Android, frontend code, GitHub source files, screenshots or client responses. Start with Paystack test credentials and a test account. The API accepts payment success only after its server verifies the transaction reference, amount and currency with Paystack. A browser return or unsigned webhook cannot mark a payment successful.
+
+The configured webhook URL is:
+
+    https://YOUR_API_HOST/api/v1/webhooks/paystack
+
+Configure that URL in Paystack and enable the relevant charge, refund and transfer events. The webhook handler validates the signature against the raw request body, applies a five-minute timestamp window for the versioned signature format, and rejects unsigned/invalid requests. Event IDs are stored to ignore duplicate deliveries.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | /api/v1/customer/bookings/:id/payments | Initialize checkout for a confirmed booking |
+| GET | /api/v1/customer/bookings/:id/payments | List payment attempts for the customer-owned booking |
+| POST | /api/v1/customer/payments/:paymentId/verify | Verify the transaction with Paystack |
+| GET | /api/v1/business/bookings/:id/payments | View payment records (owner/admin/manager) |
+| GET / POST | /api/v1/business/bookings/:id/refunds | View or request a full/partial refund |
+| POST | /api/v1/webhooks/paystack | Receive signed Paystack payment/refund/transfer events |
+
+Payment initialization requires an Idempotency-Key header. The amount is taken from the booking's confirmed price snapshot; when a customer accepts a quote, the accepted quote amount becomes the payable booking price. Prices are stored in currency subunits (for example, kobo for NGN). The current Paystack currency/country allowlist is intentionally limited and is not a claim that every SwiftServe market is enabled.
+
+A refund request is recorded before the gateway operation. Refund status is updated from gateway responses/events, and processed refund amounts reduce the amount available for provider payout. An admin decision in the dispute workflow does not automatically create a refund; an authorized business user must submit the refund request separately.
+
+### Provider payout records
+
+Providers can register a payout recipient through Paystack and view their payout history:
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET / POST / PUT | /api/v1/provider/payout-account | View or register a provider payout recipient |
+| GET | /api/v1/provider/payouts | View provider payout ledger entries |
+| GET | /api/v1/admin/payouts/pending | List payout entries awaiting transfer (admin key required) |
+| POST | /api/v1/admin/payouts/:id/process | Initiate a provider transfer (admin key required) |
+
+The current payout-account registration supports Nigerian Naira (NGN) NUBAN bank accounts only. The full bank account number is sent to Paystack over HTTPS and is not stored by SwiftServe; the database retains the provider recipient code and masked account details. Payouts are created from completed provider assignments and verified booking payments. The platform fee defaults to zero until an agreed business rate is configured. Payout processing is manually initiated by an authorized administrator; transfer webhooks update the payout status.
+
+### Reviews and disputes
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | /api/v1/customer/bookings/:id/review | Submit one 1–5 star review for a completed booking |
+| GET | /api/v1/business/reviews | List published reviews for a business |
+| GET | /api/v1/provider/reviews | List published reviews for a provider |
+| GET / POST | /api/v1/customer/bookings/:id/disputes | View or open a dispute on an eligible booking |
+| GET / POST | /api/v1/customer/disputes/:id/messages | View or add a customer dispute message |
+| GET | /api/v1/business/disputes | List business disputes |
+| GET / POST | /api/v1/business/bookings/:id/dispute | View or open a business-side dispute |
+| GET / POST | /api/v1/business/disputes/:id/messages | View or respond to a dispute |
+| GET | /api/v1/admin/disputes/pending | List open/in-review disputes (admin key required) |
+| PATCH | /api/v1/admin/disputes/:id | Move a dispute to review or record a resolution (admin key required) |
+
+Reviews require a completed booking and are limited to one review per booking. Dispute messages are scoped to the booking's customer or business. The current dispute workflow records status and resolution decisions; it does not automatically issue a refund, adjudicate uploaded evidence, or provide a complete support case-management interface.
+
+### Finance and trust limitations
+
+Phase 6 has been designed and tested against a local mock Paystack server in CI. That verifies the API workflow, not a live Paystack merchant account, live settlement, bank transfers or a deployed webhook. No production gateway secret has been added. Before accepting real money, apply migration 006 to the intended development database, configure Paystack test credentials and webhooks, complete a real sandbox payment/refund/transfer test, reconcile gateway statements, and review the supported countries/currencies and payout compliance for the launch market.
+
 ### Health checks
 
 - /health reports process liveness.
@@ -206,7 +275,7 @@ The simple authentication throttle is process-local. Before horizontal scaling o
 
 ## CI
 
-The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies all migrations, runs API HTTP/unit regression tests and runs PostgreSQL integration tests for identity, business isolation, customer locations, service bookings, quotes, notifications, provider verification and booking assignments. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
+The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies migrations 001–006, runs API HTTP/unit regression tests and runs PostgreSQL integration tests for identity, business isolation, customer locations, service bookings, provider operations, Paystack payment verification, partial refunds, provider transfers, reviews and disputes. The finance integration test uses a local mock gateway and does not contact Paystack. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
 
 ## Development roadmap
 
