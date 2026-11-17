@@ -9,7 +9,7 @@ import {
   createBookingReview, listBusinessReviews, listProviderReviews,
   createDispute, getCustomerDispute, getCustomerDisputeById, getBusinessDispute, addDisputeMessage,
   listDisputeMessages, listAdminDisputes, listBusinessDisputes, resolveDispute,
-  getBookingFinancialSummary, recordProviderWebhookEvent
+  getBookingFinancialSummary, recordProviderWebhookEvent, hasProviderWebhookEvent
 } from './finance_resources.js';
 import { getCustomerBooking, getBusinessBooking } from './marketplace_resources.js';
 import { getCompletedAssignmentForBooking } from './provider_assignments.js';
@@ -552,6 +552,8 @@ export async function handlePaystackWebhook(rawBody,headers){
   const data=event.data;
   const payloadHash=createHash('sha256').update(rawBody).digest('hex');
   const eventKey=createHash('sha256').update(eventType+'|'+String(data.reference||data.id||'')+'|'+payloadHash).digest('hex');
+  if(await hasProviderWebhookEvent('paystack',eventKey))
+    return {status:200,body:{received:true,duplicate:true}};
 
   if(eventType==='charge.success'){
     if(!process.env.PAYSTACK_SECRET_KEY)return {status:503,body:{error:'Payment verification is temporarily unavailable.'}};
