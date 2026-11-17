@@ -14,7 +14,8 @@ SwiftServe is being developed as an international household-services platform. T
 - [x] Correct architecture, database and setup documentation.
 - [x] Verify GitHub Actions API tests and Android APK build on the stabilisation pull request.
 - [ ] Apply database migrations to the development database.
-- [ ] Add PostgreSQL integration tests and verify data survives API restarts.
+- [x] Add a checksum-verified migration runner and PostgreSQL 16 integration tests in CI.
+- [ ] Apply migrations to the actual development database and verify data survives API restarts.
 - [ ] Verify the deployed API configuration and readiness behaviour.
 
 **Exit condition:** the actual development database is migrated, automated checks pass, PostgreSQL persistence is verified, and deployment does not use volatile storage.
@@ -32,7 +33,8 @@ SwiftServe is being developed as an international household-services platform. T
 - [x] Encrypt the Android bearer token with Android Keystore.
 - [x] Add process-local throttling for registration and login attempts.
 - [x] Add tests for account lifecycle, authentication and cross-business access.
-- [ ] Apply migration 002 to the development database and run PostgreSQL integration tests.
+- [x] Add PostgreSQL integration coverage for account persistence, session revocation and cross-business isolation in CI.
+- [ ] Apply migration 002 to the actual development database and verify the deployed service.
 - [ ] Add email verification, password reset, account recovery and administrative session revocation.
 - [ ] Move rate limiting to a shared gateway/store before horizontal scaling.
 - [ ] Review security, privacy and session policies for the first pilot.

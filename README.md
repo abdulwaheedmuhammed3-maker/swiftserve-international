@@ -42,12 +42,21 @@ The API defaults to port 3000. The server binds to 0.0.0.0 by default and uses t
 
 Copy apps/api/.env.example to apps/api/.env for local development and set DATABASE_URL only when connecting to a development PostgreSQL database.
 
-Apply the SQL migrations in order:
+Run the ordered SQL migration runner after setting DATABASE_URL:
 
+    npm run migrate --workspace @swiftserve/api
+
+The runner applies pending SQL migrations in filename order, stores checksums in schema_migrations and refuses to silently accept changes to an already-applied migration. It is safe to run again during deployment. Never edit an already-applied migration; add a new numbered migration instead.
+
+The current migrations are:
 1. apps/api/db/migrations/001_initial_schema.sql
 2. apps/api/db/migrations/002_identity_business_scope.sql
 
-The current project does not yet include a migration runner. Apply both files using a trusted PostgreSQL client or your managed database SQL editor, and record which migration versions have been applied.
+For Render, the API start command can run migrations before starting the server:
+
+    npm run migrate --workspace @swiftserve/api && npm start
+
+The server checks that the required migration records and tables exist before it starts.
 
 Never commit .env files or real credentials. In production, DATABASE_URL is required and the API refuses to start without it. The server checks the configured database and required core tables before listening. A missing migration makes database readiness fail. Without DATABASE_URL in development, the API uses temporary in-memory storage; those records disappear when the process stops.
 
@@ -92,7 +101,7 @@ The simple authentication throttle is process-local. Before horizontal scaling o
 
 ## CI
 
-The SwiftServe API CI workflow installs dependencies and runs the automated API tests on pushes to main and pull requests targeting main. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
+The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies migrations, runs the API HTTP/unit tests and runs PostgreSQL integration tests for account/session persistence and business isolation. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
 
 ## Development roadmap
 

@@ -85,8 +85,22 @@ export async function checkDatabase() {
   const missingTables = requiredTables.filter(name => !row[name]);
 
   if (missingTables.length) {
-    const error = new Error('Required database migrations are missing: ' + missingTables.join(', '));
+    const error = new Error('Required database tables are missing: ' + missingTables.join(', '));
     error.code = 'DATABASE_SCHEMA_INCOMPLETE';
+    throw error;
+  }
+
+  const migrations = await pool.query('SELECT version FROM schema_migrations');
+  const applied = new Set(migrations.rows.map(item => item.version));
+  const requiredMigrations = [
+    '001_initial_schema.sql',
+    '002_identity_business_scope.sql'
+  ];
+  const missingMigrations = requiredMigrations.filter(version => !applied.has(version));
+
+  if (missingMigrations.length) {
+    const error = new Error('Required migrations have not been recorded: ' + missingMigrations.join(', '));
+    error.code = 'DATABASE_MIGRATIONS_INCOMPLETE';
     throw error;
   }
 
