@@ -441,7 +441,18 @@ export async function getBusinessSummary(businessId) {
   if (!pool) {
     const business = memoryBusinesses.get(businessId);
     if (!business || business.status !== 'active') return null;
-    return { id: business.id, name: business.name, countryCode: business.countryCode ?? null };
+    return {
+      id: business.id,
+      name: business.name,
+      description: business.description ?? null,
+      businessEmail: business.businessEmail ?? null,
+      phoneE164: business.phoneE164 ?? null,
+      website: business.website ?? null,
+      countryCode: business.countryCode ?? null,
+      currencyCode: business.currencyCode ?? null,
+      timeZone: business.timeZone ?? null,
+      status: business.status
+    };
   }
   const result = await pool.query(
     "SELECT id, name, description, business_email, phone_e164, website, country_code, currency_code, time_zone, status FROM businesses WHERE id=$1 AND status='active' LIMIT 1",
