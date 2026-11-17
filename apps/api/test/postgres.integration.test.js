@@ -16,7 +16,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     'PAYSTACK_CALLBACK_URL','SWIFTSERVE_ADMIN_API_KEY','SWIFTSERVE_PLATFORM_FEE_BPS'
   ];
   const previousEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
-  const gatewayState = { reference: null, amount: null, currency: null, transferReference: null };
+  const gatewayState = { reference: null, amount: null, currency: null, transferReference: null, transactionStatus: 'success', transferStatus: 'pending', transferCalls: 0 };
   const paystackMock = http.createServer(async (req,res) => {
     const chunks=[];
     for await (const chunk of req) chunks.push(chunk);
@@ -37,7 +37,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     if(req.method==='GET'&&req.url?.startsWith('/transaction/verify/')){
       const reference=decodeURIComponent(req.url.slice('/transaction/verify/'.length));
       return send({
-        id:987654321,status:'success',reference,
+        id:987654321,status:gatewayState.transactionStatus,reference,
         amount:gatewayState.amount,currency:gatewayState.currency,
         paid_at:new Date().toISOString()
       });
@@ -51,8 +51,13 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     if(req.method==='POST'&&req.url==='/refund'){
       return send({id:7654321,status:'pending',reference:body.reference,amount:body.amount,currency:body.currency});
     }
+    if(req.method==='GET'&&req.url?.startsWith('/transfer/verify/')){
+      const reference=decodeURIComponent(req.url.slice('/transfer/verify/'.length));
+      return send({id:123456789,transfer_code:'TRF_MOCK_PROVIDER_01',status:gatewayState.transferStatus,reference});
+    }
     if(req.method==='POST'&&req.url==='/transfer'){
       gatewayState.transferReference=body.reference;
+      gatewayState.transferCalls+=1;
       return send({id:123456789,transfer_code:'TRF_MOCK_PROVIDER_01',status:'pending',reference:body.reference});
     }
     return send({message:'Unexpected mock Paystack route: '+req.method+' '+req.url},404);
@@ -368,6 +373,13 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(paymentRetry.status,200);
     assert.equal(paymentRetry.body.data.id,payment.body.data.id);
 
+    gatewayState.transactionStatus='pending';
+    const pendingPaymentVerification=await call('/api/v1/customer/payments/'+payment.body.data.id+'/verify',{
+      method:'POST',headers:customerHeaders
+    });
+    assert.equal(pendingPaymentVerification.status,202);
+    assert.equal(pendingPaymentVerification.body.data.status,'pending');
+    gatewayState.transactionStatus='success';
     const verifiedPayment=await call('/api/v1/customer/payments/'+payment.body.data.id+'/verify',{
       method:'POST',headers:customerHeaders
     });
@@ -375,9 +387,12 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(verifiedPayment.body.data.status,'succeeded');
     assert.equal(verifiedPayment.body.data.amountMinor,275000);
 
+    const savedPaystackSecret=process.env.PAYSTACK_SECRET_KEY;
+    delete process.env.PAYSTACK_SECRET_KEY;
     const paymentHistory=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/payments',{
       headers:customerHeaders
     });
+    process.env.PAYSTACK_SECRET_KEY=savedPaystackSecret;
     assert.equal(paymentHistory.status,200);
     assert.equal(paymentHistory.body.data.length,1);
 
@@ -400,7 +415,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(refund.body.data.status,'pending');
     assert.equal(refund.body.data.amountMinor,25000);
 
-    const refundWebhook=await sendPaystackWebhook({
+    const refundEvent={
       event:'refund.processed',
       data:{
         id:7654321,
@@ -409,21 +424,14 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
         amount:25000,
         currency:'NGN'
       }
-    });
+    };
+    const [refundWebhook,duplicateRefundWebhook]=await Promise.all([
+      sendPaystackWebhook(refundEvent),sendPaystackWebhook(refundEvent)
+    ]);
     assert.equal(refundWebhook.status,200);
-    assert.equal(refundWebhook.body.received,true);
-    const duplicateRefundWebhook=await sendPaystackWebhook({
-      event:'refund.processed',
-      data:{
-        id:7654321,
-        reference:refund.body.data.reference,
-        status:'processed',
-        amount:25000,
-        currency:'NGN'
-      }
-    });
     assert.equal(duplicateRefundWebhook.status,200);
-    assert.equal(duplicateRefundWebhook.body.duplicate,true);
+    assert.equal([refundWebhook,duplicateRefundWebhook].filter(item=>item.body?.received===true).length,1);
+    assert.equal([refundWebhook,duplicateRefundWebhook].filter(item=>item.body?.duplicate===true).length,1);
 
     const refundList=await call('/api/v1/business/bookings/'+booking.body.data.id+'/refunds',{
       headers:first.headers
@@ -611,6 +619,12 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(payoutStarted.status,202);
     assert.equal(payoutStarted.body.data.status,'processing');
     assert.equal(payoutStarted.body.data.transferReference,gatewayState.transferReference);
+    const payoutRetryWhilePending=await call('/api/v1/admin/payouts/'+payout.id+'/process',{
+      method:'POST',headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(payoutRetryWhilePending.status,202);
+    assert.equal(payoutRetryWhilePending.body.data.status,'processing');
+    assert.equal(gatewayState.transferCalls,1);
 
     const transferWebhook=await sendPaystackWebhook({
       event:'transfer.success',
