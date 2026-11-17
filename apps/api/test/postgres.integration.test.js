@@ -634,6 +634,13 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(payoutRetryWhilePending.body.data.status,'processing');
     assert.equal(gatewayState.transferCalls,1);
 
+    const simulateMissedPaymentCallback=await pool.query(
+      "UPDATE payment_intents SET status='pending',updated_at=now() WHERE id=$1 RETURNING id",
+      [payment.body.data.id]
+    );
+    assert.equal(simulateMissedPaymentCallback.rowCount,1);
+
+    gatewayState.transactionStatus='success';
     gatewayState.transferStatus='success';
     const reconciliation=await call('/api/v1/admin/finance/reconciliation',{
       method:'POST',
@@ -642,17 +649,17 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     });
     assert.equal(reconciliation.status,201);
     assert.equal(reconciliation.body.data.run.status,'completed');
-    assert.equal(reconciliation.body.data.run.scannedCount,1);
-    assert.equal(reconciliation.body.data.run.updatedCount,1);
-    assert.equal(reconciliation.body.data.items[0].entityType,'payout');
-    assert.equal(reconciliation.body.data.items[0].outcome,'updated');
+    assert.equal(reconciliation.body.data.run.scannedCount,2);
+    assert.equal(reconciliation.body.data.run.updatedCount,2);
+    assert.deepEqual(reconciliation.body.data.items.map(item=>item.entityType),['payment','payout']);
+    assert.ok(reconciliation.body.data.items.every(item=>item.outcome==='updated'));
 
     const reconciliationDetail=await call('/api/v1/admin/finance/reconciliation/'+reconciliation.body.data.run.id,{
       headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
     });
     assert.equal(reconciliationDetail.status,200);
-    assert.equal(reconciliationDetail.body.data.items.length,1);
-    assert.equal(reconciliationDetail.body.data.items[0].providerStatus,'success');
+    assert.equal(reconciliationDetail.body.data.items.length,2);
+    assert.ok(reconciliationDetail.body.data.items.every(item=>item.providerStatus==='success'));
 
     const financeSummary=await call('/api/v1/admin/finance/summary',{
       headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
