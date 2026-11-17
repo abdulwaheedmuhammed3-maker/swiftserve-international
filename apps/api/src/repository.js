@@ -70,8 +70,27 @@ export function isDatabaseConfigured() {
 
 export async function checkDatabase() {
   if (!pool) return { configured: false, connected: false };
+
   await pool.query('SELECT 1');
-  return { configured: true, connected: true };
+  const schema = await pool.query(
+    "SELECT to_regclass('public.service_requests') AS service_requests, " +
+    "to_regclass('public.users') AS users, " +
+    "to_regclass('public.businesses') AS businesses, " +
+    "to_regclass('public.business_memberships') AS business_memberships, " +
+    "to_regclass('public.sessions') AS sessions"
+  );
+
+  const row = schema.rows[0] || {};
+  const requiredTables = ['service_requests', 'users', 'businesses', 'business_memberships', 'sessions'];
+  const missingTables = requiredTables.filter(name => !row[name]);
+
+  if (missingTables.length) {
+    const error = new Error('Required database migrations are missing: ' + missingTables.join(', '));
+    error.code = 'DATABASE_SCHEMA_INCOMPLETE';
+    throw error;
+  }
+
+  return { configured: true, connected: true, schemaReady: true };
 }
 
 export async function createAccount({ user, business, session }) {
