@@ -425,6 +425,127 @@ export function resetStore() {
   memorySessions.clear();
 }
 
+export async function queryDatabase(text, values = []) {
+  if (!pool) return null;
+  return pool.query(text, values);
+}
+
+export async function getBusinessSummary(businessId) {
+  if (!pool) {
+    const business = memoryBusinesses.get(businessId);
+    if (!business || business.status !== 'active') return null;
+    return { id: business.id, name: business.name, countryCode: business.countryCode ?? null };
+  }
+  const result = await pool.query(
+    "SELECT id, name, description, business_email, phone_e164, website, country_code, currency_code, time_zone, status FROM businesses WHERE id=$1 AND status='active' LIMIT 1",
+    [businessId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    businessEmail: row.business_email,
+    phoneE164: row.phone_e164,
+    website: row.website,
+    countryCode: row.country_code,
+    currencyCode: row.currency_code,
+    timeZone: row.time_zone,
+    status: row.status
+  };
+}
+
+export async function updateBusinessSummary(businessId, patch) {
+  const columns = {
+    name: 'name',
+    description: 'description',
+    businessEmail: 'business_email',
+    phoneE164: 'phone_e164',
+    website: 'website',
+    countryCode: 'country_code',
+    currencyCode: 'currency_code',
+    timeZone: 'time_zone'
+  };
+  const entries = Object.entries(patch).filter(([key]) => Object.prototype.hasOwnProperty.call(columns, key));
+  if (!pool) {
+    const current = memoryBusinesses.get(businessId);
+    if (!current || current.status !== 'active') return null;
+    for (const [key, value] of entries) current[key] = value;
+    memoryBusinesses.set(businessId, current);
+    return getBusinessSummary(businessId);
+  }
+  if (entries.length === 0) return getBusinessSummary(businessId);
+  const setParts = entries.map(([key], index) => columns[key] + "=$" + (index + 2));
+  const values = entries.map(([, value]) => value);
+  const result = await pool.query(
+    "UPDATE businesses SET " + setParts.join(", ") + ", updated_at=now() WHERE id=$1 AND status='active' RETURNING id,name,description,business_email,phone_e164,website,country_code,currency_code,time_zone,status",
+    [businessId, ...values]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id, name: row.name, description: row.description,
+    businessEmail: row.business_email, phoneE164: row.phone_e164,
+    website: row.website, countryCode: row.country_code,
+    currencyCode: row.currency_code, timeZone: row.time_zone, status: row.status
+  };
+}
+
+export async function listBusinessMembers(businessId) {
+  if (!pool) {
+    const members = [];
+    for (const membership of memoryMemberships.values()) {
+      if (membership.businessId !== businessId || membership.status !== 'active') continue;
+      const user = memoryUsers.get(membership.userId);
+      if (user) members.push({
+        userId: user.id, email: user.email, fullName: user.fullName,
+        role: membership.role, joinedAt: membership.createdAt ?? null
+      });
+    }
+    return members;
+  }
+  const result = await pool.query(
+    "SELECT u.id AS user_id,u.email,u.full_name,bm.role,bm.created_at AS joined_at FROM business_memberships bm JOIN users u ON u.id=bm.user_id WHERE bm.business_id=$1 AND bm.status='active' ORDER BY CASE bm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END,u.full_name",
+    [businessId]
+  );
+  return result.rows.map(row => ({
+    userId: row.user_id, email: row.email, fullName: row.full_name,
+    role: row.role, joinedAt: row.joined_at ? new Date(row.joined_at).toISOString() : null
+  }));
+}
+
+export async function updateBusinessMemberRole(businessId, userId, role) {
+  if (!pool) {
+    const key = businessId + ':' + userId;
+    const membership = memoryMemberships.get(key);
+    if (!membership || membership.role === 'owner' || membership.status !== 'active') return null;
+    membership.role = role;
+    memoryMemberships.set(key, membership);
+    return { businessId, userId, role };
+  }
+  const result = await pool.query(
+    "UPDATE business_memberships SET role=$3 WHERE business_id=$1 AND user_id=$2 AND status='active' AND role<>'owner' RETURNING business_id,user_id,role",
+    [businessId, userId, role]
+  );
+  const row = result.rows[0];
+  return row ? { businessId: row.business_id, userId: row.user_id, role: row.role } : null;
+}
+
+export async function removeBusinessMember(businessId, userId) {
+  if (!pool) {
+    const key = businessId + ':' + userId;
+    const membership = memoryMemberships.get(key);
+    if (!membership || membership.role === 'owner') return false;
+    return memoryMemberships.delete(key);
+  }
+  const result = await pool.query(
+    "DELETE FROM business_memberships WHERE business_id=$1 AND user_id=$2 AND role<>'owner'",
+    [businessId, userId]
+  );
+  return result.rowCount > 0;
+}
+
 export async function closeDatabase() {
   if (pool) await pool.end();
 }
