@@ -88,13 +88,21 @@ export async function checkDatabase() {
     "to_regclass('public.bookings') AS bookings, " +
     "to_regclass('public.booking_quotes') AS booking_quotes, " +
     "to_regclass('public.booking_status_events') AS booking_status_events, " +
-    "to_regclass('public.notifications') AS notifications"
+    "to_regclass('public.notifications') AS notifications, " +
+    "to_regclass('public.provider_profiles') AS provider_profiles, " +
+    "to_regclass('public.provider_service_categories') AS provider_service_categories, " +
+    "to_regclass('public.provider_service_areas') AS provider_service_areas, " +
+    "to_regclass('public.provider_availability') AS provider_availability, " +
+    "to_regclass('public.booking_assignments') AS booking_assignments, " +
+    "to_regclass('public.booking_assignment_events') AS booking_assignment_events"
   );
 
   const row = schema.rows[0] || {};
   const requiredTables = ['service_requests', 'users', 'businesses', 'business_memberships', 'sessions',
     'business_branches', 'business_services', 'business_hours', 'business_service_areas', 'business_invitations',
-    'customer_profiles', 'customer_locations', 'bookings', 'booking_quotes', 'booking_status_events', 'notifications'];
+    'customer_profiles', 'customer_locations', 'bookings', 'booking_quotes', 'booking_status_events', 'notifications',
+    'provider_profiles', 'provider_service_categories', 'provider_service_areas', 'provider_availability',
+    'booking_assignments', 'booking_assignment_events'];
   const missingTables = requiredTables.filter(name => !row[name]);
 
   if (missingTables.length) {
@@ -109,7 +117,8 @@ export async function checkDatabase() {
     '001_initial_schema.sql',
     '002_identity_business_scope.sql',
     '003_business_operations.sql',
-    '004_customer_bookings.sql'
+    '004_customer_bookings.sql',
+    '005_provider_operations.sql'
   ];
   const missingMigrations = requiredMigrations.filter(version => !applied.has(version));
 
