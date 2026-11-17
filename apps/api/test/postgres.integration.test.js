@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import pg from 'pg';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
@@ -10,6 +10,59 @@ const hasTestDatabase = typeof testDatabaseUrl === 'string' && testDatabaseUrl.l
 test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDatabase }, async () => {
   process.env.NODE_ENV = 'integration';
   process.env.DATABASE_URL = testDatabaseUrl;
+
+  const envKeys = [
+    'PAYSTACK_SECRET_KEY','PAYSTACK_WEBHOOK_SECRET','PAYSTACK_API_BASE_URL',
+    'PAYSTACK_CALLBACK_URL','SWIFTSERVE_ADMIN_API_KEY','SWIFTSERVE_PLATFORM_FEE_BPS'
+  ];
+  const previousEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+  const gatewayState = { reference: null, amount: null, currency: null, transferReference: null };
+  const paystackMock = http.createServer(async (req,res) => {
+    const chunks=[];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw=Buffer.concat(chunks).toString('utf8');
+    let body={};
+    try { body=raw?JSON.parse(raw):{}; } catch {}
+    const send=(data,statusCode=200) => {
+      const payload=JSON.stringify({status:true,message:'Mock gateway response',data});
+      res.writeHead(statusCode,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});
+      res.end(payload);
+    };
+    if(req.method==='POST'&&req.url==='/transaction/initialize'){
+      gatewayState.reference=body.reference;
+      gatewayState.amount=Number(body.amount);
+      gatewayState.currency=body.currency;
+      return send({authorization_url:'https://checkout.paystack.test/mock-session',access_code:'mock_access_code',reference:body.reference});
+    }
+    if(req.method==='GET'&&req.url?.startsWith('/transaction/verify/')){
+      const reference=decodeURIComponent(req.url.slice('/transaction/verify/'.length));
+      return send({
+        id:987654321,status:'success',reference,
+        amount:gatewayState.amount,currency:gatewayState.currency,
+        paid_at:new Date().toISOString()
+      });
+    }
+    if(req.method==='POST'&&req.url==='/transferrecipient'){
+      return send({
+        recipient_code:'RCP_MOCK_PROVIDER_01',name:body.name,
+        details:{bank_name:'Mock Nigerian Bank',account_number:'******6789'}
+      });
+    }
+    if(req.method==='POST'&&req.url==='/refund'){
+      return send({id:7654321,status:'pending',reference:body.reference,amount:body.amount,currency:body.currency});
+    }
+    if(req.method==='POST'&&req.url==='/transfer'){
+      gatewayState.transferReference=body.reference;
+      return send({id:123456789,transfer_code:'TRF_MOCK_PROVIDER_01',status:'pending',reference:body.reference});
+    }
+    return send({message:'Unexpected mock Paystack route: '+req.method+' '+req.url},404);
+  });
+  await new Promise(resolve => paystackMock.listen(0,'127.0.0.1',resolve));
+  process.env.PAYSTACK_SECRET_KEY='sk_test_swiftserve_mock_only';
+  process.env.PAYSTACK_WEBHOOK_SECRET='swiftserve_mock_webhook_secret';
+  process.env.PAYSTACK_API_BASE_URL='http://127.0.0.1:'+paystackMock.address().port;
+  process.env.SWIFTSERVE_ADMIN_API_KEY='swiftserve-ci-admin-key';
+  process.env.SWIFTSERVE_PLATFORM_FEE_BPS='1000';
 
   const { requestHandler } = await import('../src/app.js');
   const { closeDatabase } = await import('../src/repository.js');
@@ -35,6 +88,23 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
       headers: response.headers,
       body: raw ? JSON.parse(raw) : null
     };
+  }
+
+  async function sendPaystackWebhook(event) {
+    const raw=Buffer.from(JSON.stringify(event));
+    const timestamp=String(Math.floor(Date.now()/1000));
+    const signature=createHmac('sha512',process.env.PAYSTACK_WEBHOOK_SECRET)
+      .update(timestamp+'.').update(raw).digest('hex');
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/v1/webhooks/paystack',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Paystack-Signature':'t='+timestamp+',v1=ci:'+signature
+      },
+      body:raw
+    });
+    const text=await response.text();
+    return {status:response.status,body:text?JSON.parse(text):null,raw};
   }
 
   async function registerBusiness(label) {
