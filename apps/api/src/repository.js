@@ -77,11 +77,17 @@ export async function checkDatabase() {
     "to_regclass('public.users') AS users, " +
     "to_regclass('public.businesses') AS businesses, " +
     "to_regclass('public.business_memberships') AS business_memberships, " +
-    "to_regclass('public.sessions') AS sessions"
+    "to_regclass('public.sessions') AS sessions, " +
+    "to_regclass('public.business_branches') AS business_branches, " +
+    "to_regclass('public.business_services') AS business_services, " +
+    "to_regclass('public.business_hours') AS business_hours, " +
+    "to_regclass('public.business_service_areas') AS business_service_areas, " +
+    "to_regclass('public.business_invitations') AS business_invitations"
   );
 
   const row = schema.rows[0] || {};
-  const requiredTables = ['service_requests', 'users', 'businesses', 'business_memberships', 'sessions'];
+  const requiredTables = ['service_requests', 'users', 'businesses', 'business_memberships', 'sessions',
+    'business_branches', 'business_services', 'business_hours', 'business_service_areas', 'business_invitations'];
   const missingTables = requiredTables.filter(name => !row[name]);
 
   if (missingTables.length) {
@@ -94,7 +100,8 @@ export async function checkDatabase() {
   const applied = new Set(migrations.rows.map(item => item.version));
   const requiredMigrations = [
     '001_initial_schema.sql',
-    '002_identity_business_scope.sql'
+    '002_identity_business_scope.sql',
+    '003_business_operations.sql'
   ];
   const missingMigrations = requiredMigrations.filter(version => !applied.has(version));
 
