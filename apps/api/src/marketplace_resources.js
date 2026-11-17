@@ -127,6 +127,38 @@ export async function listMarketplaceServices(filters={}) {
   return output.slice(offset,offset+limit);
 }
 
+export async function getMarketplaceService(serviceId) {
+  const result=await queryDatabase(
+    "SELECT bs.id AS service_id,bs.business_id,bs.category,bs.name AS service_name,bs.slug,bs.description AS service_description,bs.pricing_model,bs.currency_code,bs.price_minor,bs.duration_minutes,b.name AS business_name,b.country_code AS business_country_code,b.currency_code AS business_currency_code,b.time_zone,br.id AS branch_id,br.name AS branch_name,br.country_code AS branch_country_code,br.address_line1,br.city AS branch_city,br.region AS branch_region FROM business_services bs JOIN businesses b ON b.id=bs.business_id LEFT JOIN LATERAL (SELECT branch.* FROM business_branches branch WHERE branch.business_id=b.id AND branch.status='active' ORDER BY branch.is_primary DESC,branch.created_at ASC LIMIT 1) br ON true WHERE bs.id=$1 AND bs.is_active=true AND b.status='active' LIMIT 1",
+    [serviceId]
+  );
+  if (result) {
+    const row=result.rows[0];
+    return row?{
+      id:row.service_id,category:row.category,name:row.service_name,slug:row.slug,
+      description:row.service_description,pricingModel:row.pricing_model,
+      currencyCode:row.currency_code,priceMinor:row.price_minor===null?null:Number(row.price_minor),
+      durationMinutes:row.duration_minutes,
+      business:{id:row.business_id,name:row.business_name,countryCode:row.business_country_code,currencyCode:row.business_currency_code,timeZone:row.time_zone},
+      branch:row.branch_id?{id:row.branch_id,name:row.branch_name,countryCode:row.branch_country_code,addressLine1:row.address_line1,city:row.branch_city,region:row.branch_region}:null
+    }:null;
+  }
+
+  const businesses=await listActiveBusinessSummaries();
+  for (const business of businesses) {
+    const service=await getService(business.id,serviceId);
+    if (!service || !service.isActive) continue;
+    const branches=(await listBranches(business.id)).filter(item=>item.status==='active');
+    const branch=branches.find(item=>item.isPrimary)||branches[0]||null;
+    return {
+      ...service,
+      business,
+      branch:branch?{id:branch.id,name:branch.name,countryCode:branch.countryCode,addressLine1:branch.addressLine1,city:branch.city,region:branch.region}:null
+    };
+  }
+  return null;
+}
+
 export async function getCustomerProfile(user) {
   const result=await queryDatabase('SELECT phone_e164,preferred_language,locale FROM customer_profiles WHERE user_id=$1 LIMIT 1',[user.id]);
   if (result) {
@@ -649,4 +681,49 @@ export async function cancelCustomerBooking(userId,bookingId,note=null) {
   list.push({fromStatus:previous,toStatus:'cancelled',actorUserId:userId,note});
   events.set(bookingId,list);
   return booking;
+}
+
+
+export async function listBookingEvents(userId,bookingId,scope='customer') {
+  const booking=scope==='customer'
+    ? await getCustomerBooking(userId,bookingId)
+    : await getBusinessBooking(userId,bookingId);
+  if (!booking) return null;
+  const result=await queryDatabase(
+    'SELECT from_status,to_status,actor_user_id,note,created_at FROM booking_status_events WHERE business_id=$1 AND booking_id=$2 ORDER BY created_at ASC',
+    [booking.businessId,bookingId]
+  );
+  if (result) return result.rows.map(row=>({
+    fromStatus:row.from_status,toStatus:row.to_status,actorUserId:row.actor_user_id,
+    note:row.note,createdAt:new Date(row.created_at).toISOString()
+  }));
+  return events.get(bookingId)||[];
+}
+
+export async function listNotifications(userId) {
+  const result=await queryDatabase(
+    'SELECT id,notification_type,title,body,resource_type,resource_id,read_at,created_at FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',
+    [userId]
+  );
+  if (result) return result.rows.map(row=>({
+    id:row.id,type:row.notification_type,title:row.title,body:row.body,
+    resourceType:row.resource_type,resourceId:row.resource_id,
+    readAt:row.read_at?new Date(row.read_at).toISOString():null,
+    createdAt:new Date(row.created_at).toISOString()
+  }));
+  return [...notifications.values()].filter(item=>item.userId===userId)
+    .sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,100);
+}
+
+export async function markNotificationRead(userId,id) {
+  const result=await queryDatabase(
+    'UPDATE notifications SET read_at=now() WHERE id=$1 AND user_id=$2 AND read_at IS NULL RETURNING id',
+    [id,userId]
+  );
+  if (result) return result.rowCount>0;
+  const item=notifications.get(id);
+  if (!item || item.userId!==userId || item.readAt) return false;
+  item.readAt=new Date().toISOString();
+  notifications.set(id,item);
+  return true;
 }
