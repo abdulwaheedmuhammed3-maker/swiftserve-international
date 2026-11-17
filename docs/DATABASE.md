@@ -14,6 +14,7 @@ Never paste database credentials into chat, commit them to GitHub, or place them
 - [x] Parameterized SQL repository operations.
 - [x] Initial service-request schema.
 - [x] User, business, membership and session data model.
+- [x] Business profile fields, branches, catalogue, hours, service areas and invitations.
 - [x] Business-scoped service-request reads and writes in the API repository.
 - [ ] Apply migrations 001 and 002 to the actual development database.
 - [x] Add an ordered migration runner with checksums and applied-migration history.
@@ -56,6 +57,21 @@ Migration 002 adds:
 - service_requests.created_by_user_id: creator reference.
 
 Password hashes use scrypt. Raw bearer tokens are returned once at registration/login and are not stored in the database; only a SHA-256 hash is stored. Sessions expire after seven days and can be revoked at logout.
+
+## Business workspace data model
+
+Migration 003 adds the following business-owned resources:
+
+- businesses profile fields for description, business contact details, website, country, currency and time zone;
+- business_branches with addresses, contact details, active status and a single primary branch per business;
+- business_services with category, slug, description, fixed/hourly/quote pricing, currency and optional duration;
+- business_hours for weekly opening times at business or branch level;
+- business_service_areas for supported country, region, city and postal-code prefixes;
+- business_invitations with role, token hash, inviter, expiry and acceptance status.
+
+The branch foreign keys include business_id as part of the reference, preventing a branch from another business from being attached to a business's hours or service coverage. Service catalogue prices are stored in the smallest currency unit and must be interpreted using the configured currency. The current model does not yet include tax, discounts, travel fees or provider commission.
+
+Invitation tokens are stored as hashes. Since no email provider is connected, the API returns the raw token once to the authorized inviter with a pending-delivery notice. The inviter must share it privately. Email verification and automated email delivery remain future work.
 
 ## Existing data and backfill
 
