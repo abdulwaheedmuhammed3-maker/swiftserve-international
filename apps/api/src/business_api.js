@@ -122,10 +122,10 @@ function validateBranch(body, partial = false) {
   const errors = validateObject(body, allowed);
   const required = ['name','countryCode','addressLine1','city'];
   for (const key of required) if ((!partial || key in body) && (typeof body[key] !== 'string' || body[key].trim().length < (key === 'countryCode' ? 2 : 2))) errors.push(key + ' is required.');
-  if ('name' in body && (body.name.trim().length > 100)) errors.push('name must not exceed 100 characters.');
+  if ('name' in body && typeof body.name === 'string' && body.name.trim().length > 100) errors.push('name must not exceed 100 characters.');
   if ('countryCode' in body && !/^[A-Za-z]{2}$/.test(body.countryCode)) errors.push('countryCode must be a two-letter code.');
-  if ('addressLine1' in body && body.addressLine1.trim().length > 160) errors.push('addressLine1 must not exceed 160 characters.');
-  if ('city' in body && body.city.trim().length > 100) errors.push('city must not exceed 100 characters.');
+  if ('addressLine1' in body && typeof body.addressLine1 === 'string' && body.addressLine1.trim().length > 160) errors.push('addressLine1 must not exceed 160 characters.');
+  if ('city' in body && typeof body.city === 'string' && body.city.trim().length > 100) errors.push('city must not exceed 100 characters.');
   if ('phoneE164' in body && body.phoneE164 !== null && !/^\+[1-9]\d{7,14}$/.test(body.phoneE164)) errors.push('phoneE164 must use E.164 format.');
   if ('isPrimary' in body && typeof body.isPrimary !== 'boolean') errors.push('isPrimary must be boolean.');
   if ('status' in body && !['active','inactive'].includes(body.status)) errors.push('status must be active or inactive.');
