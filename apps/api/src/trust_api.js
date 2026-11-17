@@ -217,19 +217,6 @@ async function adminTrust(req,url){
     }
     return method(['GET','PATCH']);
   }
-  const messages=url.pathname.match(/^\/api\/v1\/admin\/disputes\/([^/]+)\/messages$/);
-  if(messages){
-    if(!validId(messages[1]))return fail(400,'INVALID_ID','Dispute ID must be a valid UUID.');
-    if(req.method!=='POST')return method(['POST']);
-    const item=await getServiceDispute(messages[1]);
-    if(!item)return fail(404,'DISPUTE_NOT_FOUND','Dispute not found.');
-    const body=await readJson(req);const errors=validateMessage(body,true);
-    if(errors.length)return fail(422,'VALIDATION_ERROR','Admin dispute message validation failed.',errors);
-    const saved=await addDisputeMessage(
-      item.openedByUserId,messages[1],body.message.trim(),body.visibility??'admin_only'
-    );
-    return saved?.error?fail(409,'DISPUTE_CLOSED',saved.error):saved?ok(saved,201):fail(404,'DISPUTE_NOT_FOUND','Dispute not found.');
-  }
   return fail(404,'NOT_FOUND','Admin trust route not found.');
 }
 
