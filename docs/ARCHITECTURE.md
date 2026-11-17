@@ -14,31 +14,52 @@ A platform administration workspace will support onboarding, disputes, market co
 
 Start with a modular monolith: one deployable API with clearly separated domain modules and a managed PostgreSQL database. This is easier to operate and more economical for an early product than introducing distributed services. Extract services only when actual workload, team boundaries or reliability needs justify it.
 
-The Android application is currently a limited business request-management MVP. The backend is a Node.js HTTP REST API. PostgreSQL is used when DATABASE_URL is configured; development without a database uses temporary in-memory storage. Production refuses to start without DATABASE_URL.
+The Android application is currently a limited business workspace. The backend is a Node.js HTTP REST API. PostgreSQL is used when DATABASE_URL is configured; development without a database uses temporary in-memory storage. Production refuses to start without DATABASE_URL.
 
 ## Current implementation
 
-- Versioned REST routes for basic service-request create, list, retrieve, update and delete operations.
-- Server-side input validation and a 1 MB request-body limit.
-- UUID validation for request identifiers.
-- A limited job-status lifecycle with concurrent-update protection.
-- PostgreSQL repository adapter using parameterized queries.
+- Versioned REST API for service request create, list, retrieve, update and delete.
+- Server-side input validation, JSON content-type checks and a 1 MB body limit.
+- UUID validation and a limited job-status lifecycle with concurrent-update protection.
+- PostgreSQL repository adapter with parameterized queries.
+- Users, businesses, business memberships and bearer sessions.
+- Password hashing with scrypt and opaque bearer tokens with SHA-256 hashes stored in the database.
+- Registration, login, logout and current-profile endpoints.
+- Business membership checks for every service-request API operation.
+- Business-scoped request reads, updates and deletes.
 - Process liveness at /health and dependency readiness at /readyz.
-- Android business MVP with local storage or API connection.
-- API tests and GitHub Actions workflows for API CI and debug APK builds.
+- Process-local throttling for registration and login attempts.
+- Android business app with registration, login, logout and encrypted session-token storage using Android Keystore.
+- API regression tests and GitHub Actions workflows for API CI and debug APK builds.
 
-Current limitations:
+## Known limitations
 
-- No authentication, sessions or role management.
-- No business ownership or business-level access isolation.
-- No customer application or provider application.
-- No business profiles, service catalogue or booking scheduler.
-- No provider verification, payments, notifications, reviews or disputes.
-- No database integration tests, formal migration runner, backup automation or production deployment validation.
+- No email verification, password reset, MFA or account recovery.
+- Session refresh and administrative session revocation are not implemented; bearer sessions expire after seven days.
+- The current registration route allows public business and customer account creation; abuse controls must be reviewed before public launch.
+- Authentication throttling is process-local and should move to a shared gateway/store before horizontal scaling.
+- There is not yet an automatic database migration runner or PostgreSQL integration test suite.
+- Legacy service requests created before business ownership was added are intentionally unassigned and hidden from business-scoped routes until a reviewed backfill is performed.
+- The Android app selects the first returned business; multi-business switching, team invitations and role-based screens are not implemented.
+- No customer app, provider app, business profile/catalogue, booking schedule, provider verification, payment, notification, reviews or dispute workflows yet.
+
+## Identity and authorization model
+
+- A user authenticates with email and password.
+- A password is stored as a scrypt hash; plaintext passwords are never persisted.
+- A successful registration/login creates a random opaque bearer token with a seven-day expiry.
+- The API stores only the SHA-256 token hash in sessions; logout revokes the stored session.
+- A business registration creates a business and an owner membership.
+- A request to a business-owned endpoint must include a bearer token and X-SwiftServe-Business-Id.
+- The API checks active business membership server-side before reading or changing requests.
+- All service-request reads and writes include business_id in the repository query.
+- Owners/admins can delete requests; members with other active roles can work with requests according to the current MVP routes.
+
+The business identifier supplied by the client is only a selection hint. It is not authority by itself. The membership check and scoped SQL query are the security boundary.
 
 ## Proposed domain modules
 
-1. **Identity and access:** users, authentication, sessions, roles, business memberships and permissions.
+1. **Identity and access:** users, authentication, sessions, roles, business memberships, permissions, recovery and MFA.
 2. **Market configuration:** countries, currencies, time zones, locales, supported payment methods and service availability.
 3. **Business management:** business profiles, branches, team members, operating hours, service areas and service catalogues.
 4. **Customer accounts:** profiles, contact preferences, saved locations and consent records.
@@ -84,10 +105,11 @@ Every business-owned record must have an explicit ownership path. Authorization 
 - Business-scoped authorization and least privilege.
 - Persistent database, reviewed migrations, backups and tested restores.
 - HTTPS at the deployment edge and TLS to managed services where supported.
-- Rate limits, request-size limits, safe error handling and structured logs.
+- Rate limits at a shared gateway/store for public deployment.
+- Safe error handling, structured logs and audit trails.
 - Secret management and rotation; no credentials in source control or mobile builds.
-- Audit trails for sensitive administrative and financial actions.
 - Minimize personal data and define consent, retention, export and deletion processes.
+- Protect mobile tokens with platform secure storage.
 - Keep payment card data with a compliant payment provider; do not store card numbers or security codes.
 
 ## International readiness
