@@ -305,7 +305,8 @@ export async function createInvitation(businessId,input,inviterId) {
     invite={id:prior?.id??randomUUID(),businessId,email:input.email,role:input.role,status:'pending',expiresAt,tokenHash};
     invitations.set(invite.id,invite);
   }
-  return { invitation:invite, invitationToken:token };
+  const {tokenHash: storedTokenHash, ...publicInvitation}=invite;
+  return { invitation:publicInvitation, invitationToken:token };
 }
 
 export async function listInvitations(businessId) {
