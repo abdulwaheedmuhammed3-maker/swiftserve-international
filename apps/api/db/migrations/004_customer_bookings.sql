@@ -144,7 +144,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS booking_quotes_one_pending_idx
 ALTER TABLE bookings
   ADD CONSTRAINT bookings_latest_quote_scope_fk
   FOREIGN KEY (business_id, latest_quote_id)
-  REFERENCES booking_quotes (business_id, id) ON DELETE RESTRICT;
+  REFERENCES booking_quotes (business_id, id) ON DELETE NO ACTION;
 
 CREATE TABLE IF NOT EXISTS booking_status_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
