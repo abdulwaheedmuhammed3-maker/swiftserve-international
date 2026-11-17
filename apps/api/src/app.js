@@ -502,7 +502,8 @@ export async function requestHandler(req, res) {
   }
 
   if (url.pathname === '/api/v1/provider/payout-account' ||
-      url.pathname === '/api/v1/provider/payouts') {
+      url.pathname === '/api/v1/provider/payouts' ||
+      url.pathname === '/api/v1/provider/reviews') {
     try {
       const authenticated = await authenticateRequest(req);
       if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
