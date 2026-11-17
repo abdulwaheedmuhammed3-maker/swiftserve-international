@@ -36,6 +36,7 @@ const memoryUsersByEmail = new Map();
 const memoryBusinesses = new Map();
 const memoryMemberships = new Map();
 const memorySessions = new Map();
+const memoryPlatformAdmins = new Set();
 
 function publicUser(user) {
   return {
@@ -88,13 +89,22 @@ export async function checkDatabase() {
     "to_regclass('public.bookings') AS bookings, " +
     "to_regclass('public.booking_quotes') AS booking_quotes, " +
     "to_regclass('public.booking_status_events') AS booking_status_events, " +
-    "to_regclass('public.notifications') AS notifications"
+    "to_regclass('public.notifications') AS notifications, " +
+    "to_regclass('public.provider_profiles') AS provider_profiles, " +
+    "to_regclass('public.provider_service_categories') AS provider_service_categories, " +
+    "to_regclass('public.provider_service_areas') AS provider_service_areas, " +
+    "to_regclass('public.provider_availability_windows') AS provider_availability_windows, " +
+    "to_regclass('public.platform_admins') AS platform_admins, " +
+    "to_regclass('public.booking_assignments') AS booking_assignments, " +
+    "to_regclass('public.booking_assignment_events') AS booking_assignment_events"
   );
 
   const row = schema.rows[0] || {};
   const requiredTables = ['service_requests', 'users', 'businesses', 'business_memberships', 'sessions',
     'business_branches', 'business_services', 'business_hours', 'business_service_areas', 'business_invitations',
-    'customer_profiles', 'customer_locations', 'bookings', 'booking_quotes', 'booking_status_events', 'notifications'];
+    'customer_profiles', 'customer_locations', 'bookings', 'booking_quotes', 'booking_status_events', 'notifications',
+    'provider_profiles', 'provider_service_categories', 'provider_service_areas', 'provider_availability_windows',
+    'platform_admins', 'booking_assignments', 'booking_assignment_events'];
   const missingTables = requiredTables.filter(name => !row[name]);
 
   if (missingTables.length) {
@@ -109,7 +119,8 @@ export async function checkDatabase() {
     '001_initial_schema.sql',
     '002_identity_business_scope.sql',
     '003_business_operations.sql',
-    '004_customer_bookings.sql'
+    '004_customer_bookings.sql',
+    '005_provider_operations.sql'
   ];
   const missingMigrations = requiredMigrations.filter(version => !applied.has(version));
 
@@ -438,6 +449,7 @@ export function resetStore() {
   memoryBusinesses.clear();
   memoryMemberships.clear();
   memorySessions.clear();
+  memoryPlatformAdmins.clear();
 }
 
 export async function withDatabaseTransaction(operation) {
@@ -624,6 +636,47 @@ export async function removeBusinessMember(businessId, userId) {
     [businessId, userId]
   );
   return result.rowCount > 0;
+}
+
+export async function isPlatformAdmin(userId) {
+  if (!pool) return memoryPlatformAdmins.has(userId);
+  const result = await pool.query(
+    'SELECT 1 FROM platform_admins WHERE user_id=$1 LIMIT 1',
+    [userId]
+  );
+  return result.rowCount > 0;
+}
+
+export async function grantPlatformAdmin(userId) {
+  if (!pool) {
+    memoryPlatformAdmins.add(userId);
+    return { userId };
+  }
+  const result = await pool.query(
+    'INSERT INTO platform_admins (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING RETURNING user_id',
+    [userId]
+  );
+  if (result.rows[0]) return { userId: result.rows[0].user_id };
+  const existing = await pool.query('SELECT user_id FROM platform_admins WHERE user_id=$1',[userId]);
+  return existing.rows[0] ? { userId: existing.rows[0].user_id } : null;
+}
+
+export async function grantPlatformAdminByEmail(email) {
+  if (!pool) {
+    const user = await findUserByEmail(email);
+    if (!user) return null;
+    return grantPlatformAdmin(user.id);
+  }
+  const result = await pool.query(
+    "INSERT INTO platform_admins (user_id) SELECT id FROM users WHERE email=$1 ON CONFLICT (user_id) DO NOTHING RETURNING user_id",
+    [email]
+  );
+  if (result.rows[0]) return { userId: result.rows[0].user_id };
+  const existing = await pool.query(
+    'SELECT pa.user_id FROM platform_admins pa JOIN users u ON u.id=pa.user_id WHERE u.email=$1 LIMIT 1',
+    [email]
+  );
+  return existing.rows[0] ? { userId: existing.rows[0].user_id } : null;
 }
 
 export async function closeDatabase() {
