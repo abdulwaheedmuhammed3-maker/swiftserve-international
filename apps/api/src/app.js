@@ -25,6 +25,9 @@ const ALLOWED_STATUSES = new Set(['pending', 'accepted', 'completed', 'cancelled
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const MAX_BODY_BYTES = 1024 * 1024;
+const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_RATE_LIMIT_MAX = Math.max(1, Number(process.env.AUTH_RATE_LIMIT_MAX || 10));
+const authAttempts = new Map();
 const STATUS_TRANSITIONS = {
   pending: new Set(['accepted', 'cancelled']),
   accepted: new Set(['completed', 'cancelled']),
@@ -52,6 +55,33 @@ function json(res, statusCode, body) {
 
 function errorResponse(code, message, details = []) {
   return { error: { code, message, details } };
+}
+
+function checkAuthRateLimit(req, res) {
+  const key = req.socket?.remoteAddress || 'unknown';
+  const now = Date.now();
+  let record = authAttempts.get(key);
+
+  if (!record || record.resetAt <= now) {
+    record = { count: 0, resetAt: now + AUTH_RATE_LIMIT_WINDOW_MS };
+  }
+
+  if (record.count >= AUTH_RATE_LIMIT_MAX) {
+    const retryAfter = Math.max(1, Math.ceil((record.resetAt - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    res.setHeader('Cache-Control', 'no-store');
+    return false;
+  }
+
+  record.count += 1;
+  authAttempts.set(key, record);
+
+  if (authAttempts.size > 10000) {
+    for (const [address, item] of authAttempts) {
+      if (item.resetAt <= now) authAttempts.delete(address);
+    }
+  }
+  return true;
 }
 
 function logSafeError(event, error) {
@@ -285,6 +315,14 @@ export async function requestHandler(req, res) {
 
   const authRoute = parseAuthRoute(url.pathname);
   if (authRoute) {
+    if (['register', 'login'].includes(authRoute) && req.method === 'POST' &&
+        !checkAuthRateLimit(req, res)) {
+      return json(res, 429, errorResponse(
+        'AUTH_RATE_LIMITED',
+        'Too many sign-in or registration attempts. Try again later.'
+      ));
+    }
+
     try {
       if (authRoute === 'register') {
         if (req.method !== 'POST') {
