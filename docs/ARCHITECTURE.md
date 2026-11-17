@@ -30,6 +30,7 @@ The Android application is currently a limited business workspace. The backend i
 - Process liveness at /health and dependency readiness at /readyz.
 - Process-local throttling for registration and login attempts.
 - Android business app with registration, login, logout and encrypted session-token storage using Android Keystore.
+- Business profile, branches, service catalogue, weekly hours, service coverage and team invitation API modules.
 - API regression tests and GitHub Actions workflows for API CI and debug APK builds.
 
 ## Known limitations
@@ -69,6 +70,14 @@ The business identifier supplied by the client is only a selection hint. It is n
 8. **Payments and finance:** payment intents, provider payouts, refunds, fees, settlement and reconciliation through country-specific adapters.
 9. **Trust and safety:** reviews, reports, disputes, moderation, audit events and support workflows.
 10. **Administration and analytics:** market operations, platform configuration, service quality, revenue and operational reporting.
+
+## Business operations model
+
+Business profile metadata lives on businesses. Multiple addresses and operating locations are stored as business_branches. Catalogue items use business_services with pricing model, currency and duration. business_hours supports a weekly schedule for the overall business or a specific branch. business_service_areas describe the supported country, region, city or postal-code prefix. Team invitations use expiring token hashes and create a business_membership only after an authenticated account with the invited email accepts.
+
+Branch references in hours and service areas are constrained by composite foreign keys on both business_id and branch_id. This ensures that valid UUIDs alone cannot be used to attach a different business's branch.
+
+The current invitation route returns the raw invite token once to the authorized inviter because no outbound email provider is connected. Do not treat invitation creation as delivery. The inviter must share the token privately until an email provider is integrated.
 
 ## Data model direction
 
