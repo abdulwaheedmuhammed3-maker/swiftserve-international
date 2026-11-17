@@ -267,7 +267,7 @@ export async function resolveServiceDispute(disputeId,status,note,adminUserId=nu
     if(!current.rows[0])return null;
     if(['resolved_customer','resolved_business','closed'].includes(current.rows[0].status))return {closed:true};
     const updated=await client.query(
-      'UPDATE service_disputes SET status=$2,resolution_note=$3,assigned_admin_id=$4,resolved_by_user_id=$4,resolved_at=now(),updated_at=now() WHERE id=$1 RETURNING *',
+      "UPDATE service_disputes SET status=$2,resolution_note=$3,assigned_admin_id=$4,resolved_by_user_id=$4,resolved_at=CASE WHEN $2 IN ('resolved_customer','resolved_business','closed') THEN now() ELSE NULL END,updated_at=now() WHERE id=$1 RETURNING *",
       [disputeId,status,note??null,adminUserId]
     );
     return {row:updated.rows[0]};
@@ -276,7 +276,10 @@ export async function resolveServiceDispute(disputeId,status,note,adminUserId=nu
   const dispute=disputes.get(disputeId);
   if(!dispute)return null;
   if(['resolved_customer','resolved_business','closed'].includes(dispute.status))return {error:'Dispute is already resolved.'};
-  const updated={...dispute,status,resolutionNote:note??null,resolvedByUserId:adminUserId,resolvedAt:new Date().toISOString()};
+  const isResolved=['resolved_customer','resolved_business','closed'].includes(status);
+  const updated={...dispute,status,resolutionNote:note??null,
+    resolvedByUserId:isResolved?adminUserId:null,
+    resolvedAt:isResolved?new Date().toISOString():null};
   disputes.set(disputeId,updated);
   return updated;
 }
