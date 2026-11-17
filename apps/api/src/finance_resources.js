@@ -245,6 +245,11 @@ export async function createRefundRecord(input){
     );
     const payment=selected.rows[0];
     if(!payment)return {error:'A successful payment for this booking was not found.'};
+    const activePayout=await client.query(
+      "SELECT status FROM provider_payouts WHERE booking_id=$1 AND status IN ('processing','paid') FOR UPDATE",
+      [input.bookingId]
+    );
+    if(activePayout.rows.length)return {error:'A provider payout is already processing or completed. This refund requires manual finance review to avoid double payment.'};
     const totals=await client.query(
       "SELECT COALESCE(SUM(amount_minor),0)::bigint AS amount FROM refunds WHERE payment_intent_id=$1 AND status IN ('pending','processing','processed')",
       [payment.id]
@@ -262,6 +267,8 @@ export async function createRefundRecord(input){
   const payment=payments.get(input.paymentIntentId);
   if(!payment||payment.businessId!==input.businessId||payment.bookingId!==input.bookingId||!['succeeded','partially_refunded'].includes(payment.status))
     return {error:'A successful payment for this booking was not found.'};
+  const activePayout=[...payouts.values()].find(item=>item.bookingId===input.bookingId&&['processing','paid'].includes(item.status));
+  if(activePayout)return {error:'A provider payout is already processing or completed. This refund requires manual finance review to avoid double payment.'};
   const used=[...refunds.values()].filter(item=>item.paymentIntentId===payment.id&&['pending','processing','processed'].includes(item.status)).reduce((sum,item)=>sum+item.amountMinor,0);
   const amount=input.amountMinor??(payment.amountMinor-used);
   if(!Number.isSafeInteger(amount)||amount<=0||amount>payment.amountMinor-used)return {error:'Refund amount exceeds the remaining refundable payment balance.'};
