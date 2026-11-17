@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { handleBusinessApi } from './business_api.js';
+import { handleMarketplaceApi } from './marketplace_api.js';
 import { acceptInvitation } from './business_resources.js';
 import {
   authenticateAccessToken,
@@ -416,6 +417,45 @@ export async function requestHandler(req, res) {
       if (error?.code === 'UNSUPPORTED_MEDIA_TYPE') return json(res, 415, errorResponse('UNSUPPORTED_MEDIA_TYPE', error.message));
       if (error?.code === 'BODY_TOO_LARGE') return json(res, 413, errorResponse('BODY_TOO_LARGE', error.message));
       logSafeError('invitation_acceptance_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/market/services') {
+    const response = await handleMarketplaceApi(req, url);
+    return json(res, response.status, response.body);
+  }
+
+  if (url.pathname === '/api/v1/customer' || url.pathname.startsWith('/api/v1/customer/')) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const response = await handleMarketplaceApi(req, url, authenticated.user);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('customer_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/business/bookings' || url.pathname.startsWith('/api/v1/business/bookings/')) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const business = await resolveBusinessContext(req, authenticated.user);
+      if (business.error) return json(res, business.status, business.error);
+      const response = await handleMarketplaceApi(req, url, authenticated.user, business);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('business_bookings_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
     }
   }
