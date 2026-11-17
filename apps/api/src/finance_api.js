@@ -620,6 +620,41 @@ async function runPaystackReconciliation(limit=50){
 
 async function handleAdminFinanceRoutes(req,url){
   if(!isAdmin(req))return fail(401,'ADMIN_UNAUTHORIZED','A valid platform admin API key is required.');
+  if(url.pathname==='/api/v1/admin/audit-logs'){
+    if(req.method!=='GET')return method(['GET']);
+    const raw=url.searchParams.get('limit');
+    const limit=raw===null?50:Number(raw);
+    if(!Number.isInteger(limit)||limit<1||limit>100)return fail(400,'INVALID_QUERY','limit must be an integer between 1 and 100.');
+    return ok(await listAdminAuditEvents(limit));
+  }
+  if(url.pathname==='/api/v1/admin/finance/summary'){
+    if(req.method!=='GET')return method(['GET']);
+    return ok(await getFinanceOperationsSummary());
+  }
+  if(url.pathname==='/api/v1/admin/finance/reconciliation'){
+    if(req.method==='GET'){
+      const raw=url.searchParams.get('limit');
+      const limit=raw===null?20:Number(raw);
+      if(!Number.isInteger(limit)||limit<1||limit>100)return fail(400,'INVALID_QUERY','limit must be an integer between 1 and 100.');
+      return ok(await listFinanceReconciliationRuns(limit));
+    }
+    if(req.method==='POST'){
+      const body=await readJson(req);
+      const errors=fields(body,['limit']);
+      if(!isObject(body))return fail(422,'VALIDATION_ERROR','Reconciliation request validation failed.',errors);
+      if(body.limit!==undefined&&(!Number.isInteger(body.limit)||body.limit<1||body.limit>50))errors.push('limit must be an integer between 1 and 50.');
+      if(errors.length)return fail(422,'VALIDATION_ERROR','Reconciliation request validation failed.',errors);
+      return await runPaystackReconciliation(body.limit??50);
+    }
+    return method(['GET','POST']);
+  }
+  const reconciliation=url.pathname.match(/^\/api\/v1\/admin\/finance\/reconciliation\/([^/]+)$/);
+  if(reconciliation){
+    if(!validId(reconciliation[1]))return fail(400,'INVALID_ID','Reconciliation run ID must be a valid UUID.');
+    if(req.method!=='GET')return method(['GET']);
+    const run=await getFinanceReconciliationRun(reconciliation[1]);
+    return run?ok(run):fail(404,'RECONCILIATION_NOT_FOUND','Reconciliation run not found.');
+  }
   if(url.pathname==='/api/v1/admin/payouts/pending'){
     if(req.method!=='GET')return method(['GET']);
     return ok(await listAdminPayouts('pending'));
@@ -652,6 +687,10 @@ async function handleAdminFinanceRoutes(req,url){
       return ok(record.payout,202);
     }
     const pending=await updatePayoutTransfer(payout[1],'processing',transferReference,null,null);
+    await writeAdminAuditEvent({
+      action:'finance.payout.transfer_requested',targetType:'provider_payout',targetId:payout[1],
+      details:{transferReference,netAmountMinor:record.payout.netAmountMinor,currencyCode:record.payout.currencyCode}
+    });
     const gateway=await paystackRequest('/transfer',{
       source:'balance',amount:record.payout.netAmountMinor,
       recipient:record.recipientCode,reference:transferReference,
@@ -659,11 +698,19 @@ async function handleAdminFinanceRoutes(req,url){
     });
     if(!gateway.ok){
       await updatePayoutTransfer(payout[1],gateway.networkError?'processing':'failed',transferReference,null,gateway.message||'Transfer could not be initiated.');
+      await writeAdminAuditEvent({
+        action:'finance.payout.transfer_request_failed',targetType:'provider_payout',targetId:payout[1],
+        outcome:'failed',details:{transferReference,networkError:Boolean(gateway.networkError),message:gateway.message||'Transfer request failed.'}
+      });
       return fail(gateway.networkError?503:502,'PAYOUT_TRANSFER_FAILED',gateway.message||'Payout transfer failed.');
     }
     const providerStatus=String(gateway.data?.status||'pending').toLowerCase();
     const next=providerStatus==='success'?'paid':'processing';
     const updated=await updatePayoutTransfer(payout[1],next,transferReference,gateway.data?.transfer_code?String(gateway.data.transfer_code):null,null);
+    await writeAdminAuditEvent({
+      action:'finance.payout.transfer_response',targetType:'provider_payout',targetId:payout[1],
+      details:{transferReference,providerStatus,nextStatus:updated?.status||next}
+    });
     return ok(updated,202);
   }
   if(url.pathname==='/api/v1/admin/disputes/pending'){
@@ -680,6 +727,10 @@ async function handleAdminFinanceRoutes(req,url){
     if(body.note!==undefined&&body.note!==null&&(typeof body.note!=='string'||body.note.length>2000))errors.push('note must not exceed 2,000 characters.');
     if(errors.length)return fail(422,'VALIDATION_ERROR','Dispute review validation failed.',errors);
     const updated=await resolveDispute(dispute[1],body.status,body.resolution??null,body.note??null);
+    if(updated)await writeAdminAuditEvent({
+      action:'trust.dispute.reviewed',targetType:'dispute',targetId:dispute[1],
+      details:{status:body.status,resolution:body.resolution??null,noteProvided:Boolean(body.note)}
+    });
     return updated?ok(updated):fail(409,'DISPUTE_ALREADY_CLOSED','Dispute not found or already closed.');
   }
   return fail(404,'NOT_FOUND','Admin finance route not found.');
