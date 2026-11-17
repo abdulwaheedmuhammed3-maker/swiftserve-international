@@ -342,6 +342,83 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(quoteAccepted.status, 200);
     assert.equal(quoteAccepted.body.data.status, 'confirmed');
 
+    const agreedBooking=await call('/api/v1/customer/bookings/'+booking.body.data.id,{
+      headers:customerHeaders
+    });
+    assert.equal(agreedBooking.status,200);
+    assert.equal(agreedBooking.body.data.servicePriceMinor,275000);
+
+    const idempotencyKey='swiftserve-payment-'+randomUUID();
+    const payment=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/payments',{
+      method:'POST',
+      headers:{...customerHeaders,'Idempotency-Key':idempotencyKey},
+      body:JSON.stringify({})
+    });
+    assert.equal(payment.status,201);
+    assert.equal(payment.body.data.status,'pending');
+    assert.equal(payment.body.data.amountMinor,275000);
+    assert.equal(payment.body.data.currencyCode,'NGN');
+    assert.equal(payment.body.data.authorizationUrl,'https://checkout.paystack.test/mock-session');
+
+    const paymentRetry=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/payments',{
+      method:'POST',
+      headers:{...customerHeaders,'Idempotency-Key':idempotencyKey},
+      body:JSON.stringify({})
+    });
+    assert.equal(paymentRetry.status,200);
+    assert.equal(paymentRetry.body.data.id,payment.body.data.id);
+
+    const verifiedPayment=await call('/api/v1/customer/payments/'+payment.body.data.id+'/verify',{
+      method:'POST',headers:customerHeaders
+    });
+    assert.equal(verifiedPayment.status,200);
+    assert.equal(verifiedPayment.body.data.status,'succeeded');
+    assert.equal(verifiedPayment.body.data.amountMinor,275000);
+
+    const paymentHistory=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/payments',{
+      headers:customerHeaders
+    });
+    assert.equal(paymentHistory.status,200);
+    assert.equal(paymentHistory.body.data.length,1);
+
+    const businessPaymentView=await call('/api/v1/business/bookings/'+booking.body.data.id+'/payments',{
+      headers:first.headers
+    });
+    assert.equal(businessPaymentView.status,200);
+    assert.equal(businessPaymentView.body.data[0].amountMinor,275000);
+
+    const refund=await call('/api/v1/business/bookings/'+booking.body.data.id+'/refunds',{
+      method:'POST',
+      headers:first.headers,
+      body:JSON.stringify({
+        amountMinor:25000,
+        customerNote:'Partial refund requested for a material adjustment.',
+        merchantNote:'Approved partial refund in integration test.'
+      })
+    });
+    assert.equal(refund.status,201);
+    assert.equal(refund.body.data.status,'pending');
+    assert.equal(refund.body.data.amountMinor,25000);
+
+    const refundWebhook=await sendPaystackWebhook({
+      event:'refund.processed',
+      data:{
+        id:7654321,
+        reference:refund.body.data.reference,
+        status:'processed',
+        amount:25000,
+        currency:'NGN'
+      }
+    });
+    assert.equal(refundWebhook.status,200);
+    assert.equal(refundWebhook.body.received,true);
+
+    const refundList=await call('/api/v1/business/bookings/'+booking.body.data.id+'/refunds',{
+      headers:first.headers
+    });
+    assert.equal(refundList.status,200);
+    assert.equal(refundList.body.data[0].status,'processed');
+
     const providerEmail = 'integration-provider-' + randomUUID() + '@example.test';
     const providerRegistration = await call('/api/v1/auth/register', {
       method: 'POST',
