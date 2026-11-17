@@ -118,12 +118,12 @@ export async function updateService(businessId, id, patch) {
 
 export async function deleteService(businessId,id) {
   const result = await queryDatabase(
-    'UPDATE business_services SET is_active=false,updated_at=now() WHERE id=$1 AND business_id=$2 AND is_active=true',
+    'UPDATE business_services SET is_active=false,updated_at=now() WHERE id=$1 AND business_id=$2 RETURNING id',
     [id,businessId]
   );
   if (result) return result.rowCount > 0;
   const item=services.get(id);
-  if (!item || item.businessId!==businessId || !item.isActive) return false;
+  if (!item || item.businessId!==businessId) return false;
   item.isActive=false;
   services.set(id,item);
   return true;
