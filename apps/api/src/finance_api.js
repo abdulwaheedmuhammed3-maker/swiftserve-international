@@ -601,7 +601,7 @@ async function runPaystackReconciliation(limit=50){
     const completed=await finishFinanceReconciliationRun(run.id,items);
     await writeAdminAuditEvent({
       action:'finance.reconciliation.completed',targetType:'reconciliation_run',targetId:run.id,
-      outcome:completed?.status==='completed'?'succeeded':'failed',
+      outcome:completed?.status==='failed'?'failed':'succeeded',
       details:{scannedCount:items.length,matchedCount:completed?.matchedCount||0,
         updatedCount:completed?.updatedCount||0,pendingCount:completed?.pendingCount||0,
         reviewCount:completed?.reviewCount||0,errorCount:completed?.errorCount||0,
