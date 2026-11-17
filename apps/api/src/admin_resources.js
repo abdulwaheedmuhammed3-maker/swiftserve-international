@@ -1,32 +1,35 @@
 import { randomUUID } from 'node:crypto';
 import { queryDatabase } from './repository.js';
+import { getCurrentAdmin } from './admin_context.js';
 
 const auditMemory=[];
 const runMemory=new Map();
 const itemMemory=new Map();
 
 export function getAdminActorKeyId(){
-  const value=String(process.env.SWIFTSERVE_ADMIN_ACTOR_ID||'shared-admin-key').trim();
-  return /^[A-Za-z0-9._:-]{1,80}$/.test(value)?value:'shared-admin-key';
+  const admin=getCurrentAdmin();
+  return admin?.id?('admin:'+admin.id):'system-admin';
 }
 
-export async function writeAdminAuditEvent({action,targetType,targetId=null,outcome='succeeded',details={}}){
-  const actorKeyId=getAdminActorKeyId();
+export async function writeAdminAuditEvent({
+  action,targetType,targetId=null,outcome='succeeded',details={},actorAdminId=getCurrentAdmin()?.id||null
+}){
+  const actorKeyId=actorAdminId?('admin:'+actorAdminId):getAdminActorKeyId();
   const safeDetails=details&&typeof details==='object'&&!Array.isArray(details)?details:{};
   const result=await queryDatabase(
-    'INSERT INTO admin_audit_logs (actor_key_id,action,target_type,target_id,outcome,details) VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING *',
-    [actorKeyId,String(action).slice(0,100),String(targetType).slice(0,60),targetId,outcome,JSON.stringify(safeDetails)]
+    'INSERT INTO admin_audit_logs (actor_admin_id,actor_key_id,action,target_type,target_id,outcome,details) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb) RETURNING *',
+    [actorAdminId,actorKeyId,String(action).slice(0,100),String(targetType).slice(0,60),targetId,outcome,JSON.stringify(safeDetails)]
   );
   if(result){
     const row=result.rows[0];
     return {
-      id:row.id,actorKeyId:row.actor_key_id,action:row.action,targetType:row.target_type,
+      id:row.id,actorAdminId:row.actor_admin_id,actorKeyId:row.actor_key_id,action:row.action,targetType:row.target_type,
       targetId:row.target_id,outcome:row.outcome,details:row.details,
       createdAt:new Date(row.created_at).toISOString()
     };
   }
   const item={
-    id:randomUUID(),actorKeyId,action:String(action).slice(0,100),
+    id:randomUUID(),actorAdminId,actorKeyId,action:String(action).slice(0,100),
     targetType:String(targetType).slice(0,60),targetId,outcome,details:safeDetails,
     createdAt:new Date().toISOString()
   };
@@ -41,7 +44,7 @@ export async function listAdminAuditEvents(limit=50){
     'SELECT * FROM admin_audit_logs ORDER BY created_at DESC LIMIT $1',[safeLimit]
   );
   if(result)return result.rows.map(row=>({
-    id:row.id,actorKeyId:row.actor_key_id,action:row.action,targetType:row.target_type,
+    id:row.id,actorAdminId:row.actor_admin_id,actorKeyId:row.actor_key_id,action:row.action,targetType:row.target_type,
     targetId:row.target_id,outcome:row.outcome,details:row.details,
     createdAt:new Date(row.created_at).toISOString()
   }));
@@ -73,13 +76,14 @@ export async function getFinanceOperationsSummary(){
 
 export async function createFinanceReconciliationRun(){
   const id=randomUUID();
+  const actorAdminId=getCurrentAdmin()?.id||null;
   const actorKeyId=getAdminActorKeyId();
   const result=await queryDatabase(
-    "INSERT INTO finance_reconciliation_runs (id,provider,actor_key_id,status) VALUES ($1,'paystack',$2,'running') RETURNING *",
-    [id,actorKeyId]
+    "INSERT INTO finance_reconciliation_runs (id,provider,actor_admin_id,actor_key_id,status) VALUES ($1,'paystack',$2,$3,'running') RETURNING *",
+    [id,actorAdminId,actorKeyId]
   );
   const item={
-    id,provider:'paystack',actorKeyId,status:'running',scannedCount:0,matchedCount:0,
+    id,provider:'paystack',actorAdminId,actorKeyId,status:'running',scannedCount:0,matchedCount:0,
     updatedCount:0,pendingCount:0,reviewCount:0,errorCount:0,summary:{},
     startedAt:new Date().toISOString(),finishedAt:null
   };
@@ -154,7 +158,7 @@ export async function finishFinanceReconciliationRun(runId,items,status='complet
   if(result){
     const row=result.rows[0];
     return row?{
-      id:row.id,provider:row.provider,actorKeyId:row.actor_key_id,status:row.status,
+      id:row.id,provider:row.provider,actorAdminId:row.actor_admin_id,actorKeyId:row.actor_key_id,status:row.status,
       scannedCount:row.scanned_count,matchedCount:row.matched_count,updatedCount:row.updated_count,
       pendingCount:row.pending_count,reviewCount:row.review_count,errorCount:row.error_count,
       summary:row.summary,startedAt:new Date(row.started_at).toISOString(),
