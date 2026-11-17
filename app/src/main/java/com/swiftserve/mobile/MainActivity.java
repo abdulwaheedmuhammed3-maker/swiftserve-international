@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.text.InputType;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -39,7 +40,7 @@ public final class MainActivity extends Activity {
     private static final int MUTED = Color.rgb(102, 117, 112);
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private LinearLayout jobsList;
-    private EditText apiUrl, description, area;
+    private EditText apiUrl, emailInput, passwordInput, fullNameInput, businessNameInput, description, area;
     private Spinner service;
     private TextView connectionStatus;
 
@@ -102,6 +103,33 @@ public final class MainActivity extends Activity {
             loadJobs();
         });
 
+        section(page, "Business account");
+        emailInput = input("Business email", true);
+        emailInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        page.addView(emailInput, params(-1, dp(52)));
+
+        passwordInput = input("Password (minimum 12 characters)", true);
+        passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        page.addView(passwordInput, params(-1, dp(52)));
+
+        fullNameInput = input("Your full name (for new accounts)", true);
+        page.addView(fullNameInput, params(-1, dp(52)));
+
+        businessNameInput = input("Business name (for new accounts)", true);
+        page.addView(businessNameInput, params(-1, dp(52)));
+
+        Button signIn = button("Sign in");
+        page.addView(signIn, params(-1, dp(48)));
+        signIn.setOnClickListener(v -> authenticate(false));
+
+        Button createAccount = button("Create business account");
+        page.addView(createAccount, params(-1, dp(48)));
+        createAccount.setOnClickListener(v -> authenticate(true));
+
+        Button signOut = button("Sign out");
+        page.addView(signOut, params(-1, dp(48)));
+        signOut.setOnClickListener(v -> signOut());
+
         section(page, "New request");
         service = new Spinner(this);
         String[] services = {"cleaning", "laundry", "electrical", "plumbing", "ac-repair", "appliance-repair", "errand"};
@@ -134,9 +162,102 @@ public final class MainActivity extends Activity {
 
     private void updateConnection() {
         String base = getPreferences(0).getString(API_KEY, "");
-        connectionStatus.setText(base.isEmpty()
-                ? "On-device mode · requests stay on this phone"
-                : "API configured · connection is checked when requests load");
+        String token = getPreferences(0).getString("access_token", "");
+        String businessName = getPreferences(0).getString("business_name", "");
+        if (base.isEmpty()) {
+            connectionStatus.setText("On-device mode · requests stay on this phone");
+        } else if (token.isEmpty()) {
+            connectionStatus.setText("API configured · sign in to your business account");
+        } else {
+            connectionStatus.setText("Signed in · " + (businessName.isEmpty() ? "business workspace" : businessName));
+        }
+    }
+
+    private void authenticate(boolean createAccount) {
+        String base = getPreferences(0).getString(API_KEY, "");
+        if (base.isEmpty()) {
+            toast("Save your HTTPS API address first.");
+            return;
+        }
+
+        String email = emailInput.getText().toString().trim();
+        String password = passwordInput.getText().toString();
+        String fullName = fullNameInput.getText().toString().trim();
+        String businessName = businessNameInput.getText().toString().trim();
+
+        if (email.isEmpty() || password.isEmpty()) {
+            toast("Enter your business email and password.");
+            return;
+        }
+        if (createAccount && (fullName.length() < 2 || businessName.length() < 2 || password.length() < 12)) {
+            toast("For registration, enter your name, business name and a password of at least 12 characters.");
+            return;
+        }
+
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("email", email);
+            payload.put("password", password);
+            if (createAccount) {
+                payload.put("fullName", fullName);
+                payload.put("accountType", "business");
+                payload.put("businessName", businessName);
+            }
+        } catch (JSONException ignored) {
+            toast("Could not prepare the account request.");
+            return;
+        }
+
+        String path = createAccount ? "/api/v1/auth/register" : "/api/v1/auth/login";
+        perform(() -> api("POST", path, payload), result -> {
+            JSONObject data = result.optJSONObject("data");
+            JSONArray businesses = data == null ? null : data.optJSONArray("businesses");
+            JSONObject firstBusiness = businesses == null || businesses.length() == 0
+                    ? null : businesses.optJSONObject(0);
+            if (data == null || firstBusiness == null || data.optString("accessToken").isEmpty()) {
+                toast("This account has no business workspace. Sign in with a business account.");
+                return;
+            }
+
+            getPreferences(0).edit()
+                    .putString("access_token", data.optString("accessToken"))
+                    .putString("business_id", firstBusiness.optString("id"))
+                    .putString("business_name", firstBusiness.optString("name"))
+                    .apply();
+            passwordInput.setText("");
+            updateConnection();
+            loadJobs();
+            toast(createAccount ? "Business account created." : "Signed in successfully.");
+        });
+    }
+
+    private void signOut() {
+        String token = getPreferences(0).getString("access_token", "");
+        if (token.isEmpty()) {
+            clearLocalSession();
+            toast("Signed out on this device.");
+            return;
+        }
+        perform(() -> api("POST", "/api/v1/auth/logout", new JSONObject()), result -> {
+            clearLocalSession();
+            updateConnection();
+            if (jobsList != null) jobsList.removeAllViews();
+            toast("Signed out successfully.");
+        });
+    }
+
+    private void clearLocalSession() {
+        getPreferences(0).edit()
+                .remove("access_token")
+                .remove("business_id")
+                .remove("business_name")
+                .apply();
+        updateConnection();
+    }
+
+    private boolean hasBusinessSession() {
+        return !getPreferences(0).getString("access_token", "").isEmpty()
+                && !getPreferences(0).getString("business_id", "").isEmpty();
     }
 
     private void createJob() {
@@ -155,6 +276,10 @@ public final class MainActivity extends Activity {
         } catch (JSONException ignored) { return; }
 
         String base = getPreferences(0).getString(API_KEY, "");
+        if (!base.isEmpty() && !hasBusinessSession()) {
+            toast("Sign in to your business account before sending requests.");
+            return;
+        }
         if (base.isEmpty()) {
             JSONArray list = localJobs();
             try {
@@ -180,6 +305,13 @@ public final class MainActivity extends Activity {
         String base = getPreferences(0).getString(API_KEY, "");
         if (base.isEmpty()) {
             render(localJobs());
+            return;
+        }
+        if (!hasBusinessSession()) {
+            jobsList.removeAllViews();
+            TextView signInMessage = text("Sign in to your business account to view requests.", 14, MUTED, false);
+            signInMessage.setPadding(dp(4), dp(18), dp(4), dp(18));
+            jobsList.addView(signInMessage);
             return;
         }
         perform(() -> api("GET", "/api/v1/jobs", null).optJSONArray("data"), result -> {
@@ -321,6 +453,14 @@ public final class MainActivity extends Activity {
         conn.setConnectTimeout(10000);
         conn.setReadTimeout(10000);
         conn.setRequestProperty("Accept", "application/json");
+        String accessToken = getPreferences(0).getString("access_token", "");
+        String businessId = getPreferences(0).getString("business_id", "");
+        if (!accessToken.isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + accessToken);
+        }
+        if (!businessId.isEmpty()) {
+            conn.setRequestProperty("X-SwiftServe-Business-Id", businessId);
+        }
         if (body != null) {
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
