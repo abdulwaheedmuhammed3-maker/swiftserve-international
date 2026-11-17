@@ -5,6 +5,7 @@ import { acceptInvitation } from './business_resources.js';
 import { initializeProviderProfile } from './provider_resources.js';
 import { handleAdminProviderApi, handleProviderApi } from './provider_api.js';
 import { handlePaymentApi } from './payments_api.js';
+import { handleTrustApi } from './trust_api.js';
 import {
   authenticateAccessToken,
   getAccountProfile,
@@ -431,6 +432,21 @@ export async function requestHandler(req, res) {
     }
   }
 
+  if (url.pathname === '/api/v1/admin/disputes' ||
+      /^\/api\/v1\/admin\/disputes\/[^/]+$/.test(url.pathname)) {
+    try {
+      const response = await handleTrustApi(req, url);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('admin_dispute_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected trust API error occurred.'));
+    }
+  }
+
   if (url.pathname === '/api/v1/admin/providers/pending' ||
       /^\/api\/v1\/admin\/providers\/[^/]+\/verification$/.test(url.pathname)) {
     try {
@@ -491,6 +507,24 @@ export async function requestHandler(req, res) {
     } catch (error) {
       logSafeError('customer_payment_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected payment API error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/customer/disputes' ||
+      /^\/api\/v1\/customer\/disputes\/[^/]+(?:\/messages)?$/.test(url.pathname) ||
+      /^\/api\/v1\/customer\/bookings\/[^/]+\/(?:review|disputes)$/.test(url.pathname)) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const response = await handleTrustApi(req, url, authenticated.user);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('customer_trust_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected trust API error occurred.'));
     }
   }
 
@@ -579,6 +613,27 @@ export async function requestHandler(req, res) {
     } catch (error) {
       logSafeError('business_bookings_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/business/reviews' ||
+      url.pathname.startsWith('/api/v1/business/reviews/') ||
+      url.pathname === '/api/v1/business/disputes' ||
+      url.pathname.startsWith('/api/v1/business/disputes/')) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const business = await resolveBusinessContext(req, authenticated.user);
+      if (business.error) return json(res, business.status, business.error);
+      const response = await handleTrustApi(req, url, authenticated.user, business);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('business_trust_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected trust API error occurred.'));
     }
   }
 
