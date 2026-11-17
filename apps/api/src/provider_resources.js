@@ -49,7 +49,8 @@ export async function initializeProviderProfile(user, countryCode) {
   const current = profiles.get(user.id);
   if (current) return current;
   const profile = {
-    userId:user.id,displayName:user.fullName,phoneE164:null,bio:null,
+    userId:user.id,email:user.email,fullName:user.fullName,
+    displayName:user.fullName,phoneE164:null,bio:null,
     countryCode:countryCode.toUpperCase(),timeZone:'UTC',
     onboardingStatus:'incomplete',verificationStatus:'unverified',
     verificationNote:null,verifiedAt:null
@@ -212,7 +213,21 @@ export async function listBusinessProviders(businessId) {
     onboardingStatus:row.onboarding_status,verificationStatus:row.verification_status,
     createdAt:new Date(row.created_at).toISOString()
   }));
-  return [...businessProviders.values()].filter(item=>item.businessId===businessId);
+  return [...businessProviders.values()]
+    .filter(item=>item.businessId===businessId&&item.status==='active')
+    .map(item=>{
+      const profile=profiles.get(item.providerUserId)||{};
+      return {
+        ...item,
+        email:profile.email??null,
+        fullName:profile.fullName??profile.displayName??null,
+        displayName:profile.displayName??null,
+        countryCode:profile.countryCode??null,
+        timeZone:profile.timeZone??null,
+        onboardingStatus:profile.onboardingStatus??null,
+        verificationStatus:profile.verificationStatus??null
+      };
+    });
 }
 
 export async function createProviderInvitation(businessId,email,invitedByUserId) {
