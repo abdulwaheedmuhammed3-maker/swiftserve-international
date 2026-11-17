@@ -51,6 +51,7 @@ The runner applies pending SQL migrations in filename order, stores checksums in
 The current migrations are:
 1. apps/api/db/migrations/001_initial_schema.sql
 2. apps/api/db/migrations/002_identity_business_scope.sql
+3. apps/api/db/migrations/003_business_operations.sql
 
 For Render, the API start command can run migrations before starting the server:
 
@@ -60,7 +61,7 @@ The server checks that the required migration records and tables exist before it
 
 Never commit .env files or real credentials. In production, DATABASE_URL is required and the API refuses to start without it. The server checks the configured database and required core tables before listening. A missing migration makes database readiness fail. Without DATABASE_URL in development, the API uses temporary in-memory storage; those records disappear when the process stops.
 
-Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Existing requests from before this migration have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
+Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Migration 003 adds business profiles, branches, service catalogues, opening hours, service coverage and team invitations. Existing requests from before migration 002 have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
 
 ### Authentication endpoints
 
@@ -92,6 +93,32 @@ The API verifies active membership before reading or changing business requests.
 
 The current status lifecycle is pending → accepted → completed, with cancellation allowed from pending or accepted. Completed and cancelled requests are terminal in this MVP.
 
+### Business workspace endpoints
+
+All business workspace endpoints require the same bearer access token and X-SwiftServe-Business-Id header.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET / PATCH | /api/v1/business/profile | Read or update business profile |
+| GET / POST | /api/v1/business/services | List or add catalogue items |
+| GET / PATCH / DELETE | /api/v1/business/services/:id | Read, edit or delete a catalogue item |
+| GET / POST | /api/v1/business/branches | List or add branches |
+| GET / PATCH / DELETE | /api/v1/business/branches/:id | Read, edit or delete a branch |
+| GET / PUT | /api/v1/business/hours | Read or set weekly opening hours |
+| GET / POST | /api/v1/business/service-areas | List or add service coverage areas |
+| PATCH / DELETE | /api/v1/business/service-areas/:id | Edit or delete a coverage area |
+| GET | /api/v1/business/team/members | List active business members |
+| PATCH / DELETE | /api/v1/business/team/members/:userId | Change a member role or remove a member |
+| GET / POST | /api/v1/business/team/invitations | List or create team invitations |
+| DELETE | /api/v1/business/team/invitations/:id | Revoke a pending invitation |
+| POST | /api/v1/auth/invitations/accept | Accept an invitation with the signed-in account |
+
+Business profile updates, team changes and destructive operations are role-restricted. A business owner cannot be demoted or removed through the team routes. Branch references are constrained to the same business in PostgreSQL.
+
+Service prices use the priceMinor field, the smallest currency unit (for example, kobo for NGN). The current opening-hours model accepts 24-hour HH:MM values and does not yet support an overnight opening interval.
+
+There is no email delivery provider configured yet. Creating a team invitation returns its raw invitation token once in the API response with a pending-delivery notice. Share it privately; do not place it in logs, public messages or screenshots.
+
 ### Health checks
 
 - /health reports process liveness.
@@ -107,7 +134,7 @@ The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies
 
 1. Verify the stabilised API deployment and PostgreSQL integration.
 2. Complete identity and business isolation, including migration/integration tests, session lifecycle and operational hardening.
-3. Build business profiles, service catalogues, operating hours, branches and team management.
+3. Complete business operations, including staff invitation delivery, multiple-business switching and full operational reporting.
 4. Build customer discovery, booking, provider assignment and notifications.
 5. Add provider verification, payments, refunds, reviews and dispute workflows.
 6. Prepare one launch market at a time with appropriate country, privacy, tax and payment configuration.
