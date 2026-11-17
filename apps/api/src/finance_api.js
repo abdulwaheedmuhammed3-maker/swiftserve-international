@@ -7,7 +7,7 @@ import {
   createOrRefreshPayoutForCompletedAssignment, listAdminPayouts,
   getPayoutForProcessing, updatePayoutTransfer, updatePayoutByTransferReference,
   createBookingReview, listBusinessReviews, listProviderReviews,
-  createDispute, getCustomerDispute, getBusinessDispute, addDisputeMessage,
+  createDispute, getCustomerDispute, getCustomerDisputeById, getBusinessDispute, addDisputeMessage,
   listDisputeMessages, listAdminDisputes, listBusinessDisputes, resolveDispute,
   getBookingFinancialSummary, recordProviderWebhookEvent
 } from './finance_resources.js';
@@ -153,7 +153,12 @@ async function startCustomerPayment(req,url,user){
   if(!process.env.PAYSTACK_SECRET_KEY)return fail(503,'PAYMENT_GATEWAY_NOT_CONFIGURED','Online payments are not enabled. Configure PAYSTACK_SECRET_KEY on the server first.');
   const match=url.pathname.match(/^\/api\/v1\/customer\/bookings\/([^/]+)\/payments$/);
   if(!match||!validId(match[1]))return fail(400,'INVALID_ID','Booking ID must be a valid UUID.');
-  if(req.method!=='POST')return method(['POST']);
+  if(req.method==='GET'){
+    const booking=await getCustomerBooking(user.id,match[1]);
+    if(!booking)return fail(404,'BOOKING_NOT_FOUND','Booking not found.');
+    return ok(await listCustomerPayments(user.id,booking.id));
+  }
+  if(req.method!=='POST')return method(['GET','POST']);
   const idempotencyKey=req.headers['idempotency-key'];
   if(typeof idempotencyKey!=='string'||idempotencyKey.trim().length<8||idempotencyKey.length>120)
     return fail(400,'IDEMPOTENCY_KEY_REQUIRED','Provide an Idempotency-Key header containing 8–120 characters.');
@@ -347,8 +352,7 @@ async function handleCustomerTrustRoutes(req,url,user){
   const messages=url.pathname.match(/^\/api\/v1\/customer\/disputes\/([^/]+)\/messages$/);
   if(messages){
     if(!validId(messages[1]))return fail(400,'INVALID_ID','Dispute ID must be a valid UUID.');
-    const owned=await listAdminDisputes(null);
-    const disputeItem=owned.find(item=>item.id===messages[1]&&item.openedByUserId===user.id&&item.openedByRole==='customer');
+    const disputeItem=await getCustomerDisputeById(user.id,messages[1]);
     if(!disputeItem)return fail(404,'DISPUTE_NOT_FOUND','Dispute not found.');
     if(req.method==='GET')return ok(await listDisputeMessages({disputeId:disputeItem.id,businessId:disputeItem.businessId}));
     if(req.method!=='POST')return method(['GET','POST']);
