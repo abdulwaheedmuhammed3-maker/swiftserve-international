@@ -14,7 +14,24 @@ permissions:
 jobs:
   test-api:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: swiftserve
+          POSTGRES_PASSWORD: swiftserve_test
+          POSTGRES_DB: swiftserve_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U swiftserve -d swiftserve_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://swiftserve:swiftserve_test@localhost:5432/swiftserve_test
+      TEST_DATABASE_URL: postgresql://swiftserve:swiftserve_test@localhost:5432/swiftserve_test
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -24,5 +41,9 @@ jobs:
           node-version: 20
       - name: Install dependencies
         run: npm install
-      - name: Run API tests
+      - name: Apply database migrations
+        run: npm run migrate --workspace @swiftserve/api
+      - name: Run API unit and HTTP tests
         run: npm test
+      - name: Run PostgreSQL integration tests
+        run: npm run test:integration --workspace @swiftserve/api
