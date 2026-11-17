@@ -70,6 +70,24 @@ async function registerBusiness(base, email = 'owner@example.com', businessName 
   };
 }
 
+async function registerCustomer(base,email='customer@example.com',fullName='Test Customer') {
+  const response=await request(base,'/api/v1/auth/register',{
+    method:'POST',
+    body:JSON.stringify({
+      email,
+      password:'StrongPass#12345',
+      fullName,
+      accountType:'customer'
+    })
+  });
+  assert.equal(response.status,201);
+  return {
+    user:response.body.data.user,
+    accessToken:response.body.data.accessToken,
+    headers:{Authorization:'Bearer '+response.body.data.accessToken}
+  };
+}
+
 test.beforeEach(() => resetStore());
 
 test('business registration creates an owner membership and returns a bearer session', async () => {
@@ -787,6 +805,287 @@ test('business resources cannot be accessed by another business', async () => {
     });
     assert.equal(forbidden.status,403);
     assert.equal(forbidden.body.error.code,'BUSINESS_ACCESS_DENIED');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+
+test('customer profile updates preserve omitted fields and saved locations remain private', async () => {
+  const server=await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const customer=await registerCustomer(base,'profile-customer@example.com');
+    const other=await registerCustomer(base,'other-customer@example.com','Other Customer');
+
+    const firstPatch=await request(base,'/api/v1/customer/profile',{
+      method:'PATCH',
+      headers:customer.headers,
+      body:JSON.stringify({phoneE164:'+2348012345678',preferredLanguage:'en'})
+    });
+    assert.equal(firstPatch.status,200);
+    const secondPatch=await request(base,'/api/v1/customer/profile',{
+      method:'PATCH',
+      headers:customer.headers,
+      body:JSON.stringify({locale:'en-NG'})
+    });
+    assert.equal(secondPatch.status,200);
+    assert.equal(secondPatch.body.data.phoneE164,'+2348012345678');
+    assert.equal(secondPatch.body.data.preferredLanguage,'en');
+    assert.equal(secondPatch.body.data.locale,'en-NG');
+
+    const saved=await request(base,'/api/v1/customer/locations',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({
+        label:'Home',
+        recipientName:'Test Customer',
+        phoneE164:'+2348012345678',
+        countryCode:'NG',
+        addressLine1:'12 Unity Road',
+        city:'Ilorin',
+        region:'Kwara',
+        isDefault:true
+      })
+    });
+    assert.equal(saved.status,201);
+    assert.equal(saved.body.data.isDefault,true);
+
+    const inaccessible=await request(base,'/api/v1/customer/locations/'+saved.body.data.id,{
+      headers:other.headers
+    });
+    assert.equal(inaccessible.status,404);
+
+    const updated=await request(base,'/api/v1/customer/locations/'+saved.body.data.id,{
+      method:'PATCH',
+      headers:customer.headers,
+      body:JSON.stringify({label:'Primary Home'})
+    });
+    assert.equal(updated.status,200);
+    assert.equal(updated.body.data.label,'Primary Home');
+    assert.equal(updated.body.data.city,'Ilorin');
+
+    const list=await request(base,'/api/v1/customer/locations',{headers:customer.headers});
+    assert.equal(list.status,200);
+    assert.equal(list.body.data.length,1);
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('customers can discover services, request bookings, receive quotes and follow status history', async () => {
+  const server=await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const owner=await registerBusiness(base,'marketplace-owner@example.com','Ilorin Home Care');
+
+    const branch=await request(base,'/api/v1/business/branches',{
+      method:'POST',
+      headers:owner.headers,
+      body:JSON.stringify({
+        name:'Ilorin Central',
+        countryCode:'NG',
+        addressLine1:'10 Unity Road',
+        city:'Ilorin',
+        region:'Kwara',
+        isPrimary:true
+      })
+    });
+    assert.equal(branch.status,201);
+
+    const service=await request(base,'/api/v1/business/services',{
+      method:'POST',
+      headers:owner.headers,
+      body:JSON.stringify({
+        category:'cleaning',
+        name:'Apartment Deep Cleaning',
+        slug:'apartment-deep-cleaning',
+        description:'Detailed deep cleaning for residential apartments.',
+        pricingModel:'fixed',
+        currencyCode:'NGN',
+        priceMinor:150000,
+        durationMinutes:180
+      })
+    });
+    assert.equal(service.status,201);
+
+    const area=await request(base,'/api/v1/business/service-areas',{
+      method:'POST',
+      headers:owner.headers,
+      body:JSON.stringify({
+        branchId:branch.body.data.id,
+        countryCode:'NG',
+        region:'Kwara',
+        city:'Ilorin'
+      })
+    });
+    assert.equal(area.status,201);
+
+    const discovery=await request(base,'/api/v1/market/services?countryCode=NG&city=Ilorin&category=cleaning');
+    assert.equal(discovery.status,200);
+    assert.ok(discovery.body.data.some(item=>item.id===service.body.data.id));
+    assert.equal(discovery.body.data.find(item=>item.id===service.body.data.id).business.name,'Ilorin Home Care');
+
+    const customer=await registerCustomer(base,'booking-customer@example.com');
+    const saved=await request(base,'/api/v1/customer/locations',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({
+        label:'Home',
+        recipientName:'Booking Customer',
+        phoneE164:'+2348012345678',
+        countryCode:'NG',
+        addressLine1:'25 Tanke Road',
+        city:'Ilorin',
+        region:'Kwara',
+        isDefault:true
+      })
+    });
+    assert.equal(saved.status,201);
+
+    const requestedStartAt=new Date(Date.now()+48*60*60*1000).toISOString();
+    const booking=await request(base,'/api/v1/customer/bookings',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({
+        serviceId:service.body.data.id,
+        locationId:saved.body.data.id,
+        requestedStartAt,
+        customerNotes:'Please call before arrival.'
+      })
+    });
+    assert.equal(booking.status,201);
+    assert.equal(booking.body.data.status,'requested');
+    assert.equal(booking.body.data.businessId,owner.businessId);
+    assert.equal(booking.body.data.customerLocationId,saved.body.data.id);
+
+    const businessList=await request(base,'/api/v1/business/bookings',{
+      headers:owner.headers
+    });
+    assert.equal(businessList.status,200);
+    assert.ok(businessList.body.data.some(item=>item.id===booking.body.data.id));
+
+    const quote=await request(base,'/api/v1/business/bookings/'+booking.body.data.id+'/quotes',{
+      method:'POST',
+      headers:owner.headers,
+      body:JSON.stringify({amountMinor:180000,message:'Includes materials and labour.'})
+    });
+    assert.equal(quote.status,201);
+    assert.equal(quote.body.data.currencyCode,'NGN');
+    assert.equal(quote.body.data.status,'pending');
+
+    const quotes=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/quotes',{
+      headers:customer.headers
+    });
+    assert.equal(quotes.status,200);
+    assert.equal(quotes.body.data.length,1);
+
+    const accepted=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/quotes/'+quote.body.data.id+'/response',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({action:'accept'})
+    });
+    assert.equal(accepted.status,200);
+    assert.equal(accepted.body.data.status,'confirmed');
+
+    const current=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id,{
+      headers:customer.headers
+    });
+    assert.equal(current.status,200);
+    assert.equal(current.body.data.status,'confirmed');
+
+    const events=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/events',{
+      headers:customer.headers
+    });
+    assert.equal(events.status,200);
+    assert.ok(events.body.data.some(item=>item.toStatus==='requested'));
+    assert.ok(events.body.data.some(item=>item.toStatus==='quoted'));
+    assert.ok(events.body.data.some(item=>item.toStatus==='confirmed'));
+
+    const customerNotifications=await request(base,'/api/v1/notifications',{headers:customer.headers});
+    assert.equal(customerNotifications.status,200);
+    const quoteNotification=customerNotifications.body.data.find(item=>item.type==='booking_quote');
+    assert.ok(quoteNotification);
+
+    const marked=await request(base,'/api/v1/notifications/'+quoteNotification.id+'/read',{
+      method:'PATCH',
+      headers:customer.headers
+    });
+    assert.equal(marked.status,200);
+    assert.equal(marked.body.data.read,true);
+
+    const otherCustomer=await registerCustomer(base,'booking-other@example.com','Other Customer');
+    const hidden=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id,{
+      headers:otherCustomer.headers
+    });
+    assert.equal(hidden.status,404);
+
+    const cancelled=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/cancel',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({note:'Customer changed plans.'})
+    });
+    assert.equal(cancelled.status,200);
+    assert.equal(cancelled.body.data.status,'cancelled');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('booking requests reject expired times and service areas outside a business coverage region', async () => {
+  const server=await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const owner=await registerBusiness(base,'coverage-owner@example.com','Coverage Test Business');
+    const service=await request(base,'/api/v1/business/services',{
+      method:'POST',
+      headers:owner.headers,
+      body:JSON.stringify({
+        category:'plumbing',
+        name:'Kitchen Pipe Repair',
+        slug:'kitchen-pipe-repair',
+        description:'Repair leaking kitchen pipes and taps.',
+        pricingModel:'quote',
+        currencyCode:'NGN',
+        priceMinor:null
+      })
+    });
+    assert.equal(service.status,201);
+    const customer=await registerCustomer(base,'coverage-customer@example.com');
+    const expired=await request(base,'/api/v1/customer/bookings',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({
+        serviceId:service.body.data.id,
+        serviceAddress:{
+          recipientName:'Customer',
+          countryCode:'NG',
+          addressLine1:'5 Test Street',
+          city:'Ilorin',
+          region:'Kwara'
+        },
+        requestedStartAt:new Date(Date.now()-3600000).toISOString()
+      })
+    });
+    assert.equal(expired.status,422);
+
+    const future=await request(base,'/api/v1/customer/bookings',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({
+        serviceId:service.body.data.id,
+        serviceAddress:{
+          recipientName:'Customer',
+          countryCode:'NG',
+          addressLine1:'5 Test Street',
+          city:'Ibadan',
+          region:'Oyo'
+        },
+        requestedStartAt:new Date(Date.now()+86400000).toISOString()
+      })
+    });
+    assert.equal(future.status,422);
+    assert.equal(future.body.error.code,'SERVICE_OUT_OF_AREA');
   } finally {
     await stopTestServer(server);
   }
