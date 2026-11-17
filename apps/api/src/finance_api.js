@@ -215,6 +215,10 @@ async function verifyCustomerPayment(req,url,user){
     const verified=await markPaymentSucceeded(payment.reference,data,eventKey,'transaction.verify',payloadHash);
     if(verified.missing)return fail(404,'PAYMENT_NOT_FOUND','Payment not found.');
     if(verified.mismatch)return fail(409,'PAYMENT_MISMATCH','The gateway amount, currency or reference does not match the booking.');
+    if(verified.changed){
+      const assignment=await getCompletedAssignmentForBooking(payment.bookingId);
+      if(assignment)await createOrRefreshPayoutForCompletedAssignment(payment.bookingId,assignment);
+    }
     return ok(verified.payment);
   }
   const eventKey=createHash('sha256').update('verify|'+payment.reference+'|'+String(data.status||'unknown')).digest('hex');
@@ -469,7 +473,7 @@ async function handleAdminFinanceRoutes(req,url){
   }
   if(url.pathname==='/api/v1/admin/disputes/pending'){
     if(req.method!=='GET')return method(['GET']);
-    return ok(await listAdminDisputes(null));
+    return ok(await listAdminDisputes('active'));
   }
   const dispute=url.pathname.match(/^\/api\/v1\/admin\/disputes\/([^/]+)$/);
   if(dispute){
@@ -560,7 +564,10 @@ export async function handlePaystackWebhook(rawBody,headers){
       const outcome=await markPaymentSucceeded(reference,verified,eventKey,eventType,payloadHash);
       if(outcome.mismatch)return {status:409,body:{error:'Payment verification values do not match.'}};
       if(outcome.missing)return {status:200,body:{received:true,ignored:true}};
-      if(outcome.changed)await createOrRefreshPayoutForCompletedAssignment(outcome.payment.bookingId);
+      if(outcome.changed){
+        const assignment=await getCompletedAssignmentForBooking(outcome.payment.bookingId);
+        if(assignment)await createOrRefreshPayoutForCompletedAssignment(outcome.payment.bookingId,assignment);
+      }
     }
   }else if(eventType==='charge.failed'){
     const reference=String(data.reference||'');
@@ -568,7 +575,13 @@ export async function handlePaystackWebhook(rawBody,headers){
   }else if(['refund.pending','refund.processing','refund.processed','refund.failed'].includes(eventType)){
     const status=eventType.split('.')[1];
     const reference=String(data.reference||data.refund_reference||'');
-    if(reference)await updateRefundStatus(reference,status,data.id?String(data.id):null,data.message||null);
+    if(reference){
+      const refund=await updateRefundStatus(reference,status,data.id?String(data.id):null,data.message||null);
+      if(refund?.bookingId){
+        const assignment=await getCompletedAssignmentForBooking(refund.bookingId);
+        if(assignment)await createOrRefreshPayoutForCompletedAssignment(refund.bookingId,assignment);
+      }
+    }
   }else if(['transfer.success','transfer.failed','transfer.reversed'].includes(eventType)){
     const reference=String(data.reference||'');
     if(reference)await updatePayoutByTransferReference(reference,eventType==='transfer.success'?'paid':'failed',data.id?String(data.id):null);
