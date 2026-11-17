@@ -44,6 +44,7 @@ function mapBooking(row) {
     confirmedStartAt:row.confirmed_start_at?new Date(row.confirmed_start_at).toISOString():null,
     confirmedEndAt:row.confirmed_end_at?new Date(row.confirmed_end_at).toISOString():null,
     customerNotes:row.customer_notes, status:row.status, latestQuoteId:row.latest_quote_id,
+    paymentStatus:row.payment_status??'not_required',
     createdAt:row.created_at?new Date(row.created_at).toISOString():null,
     updatedAt:row.updated_at?new Date(row.updated_at).toISOString():null
   };
@@ -307,7 +308,8 @@ export async function createCustomerBooking(userId,input,service,location) {
       postalCode:address.postalCode??null
     },requestedStartAt:input.requestedStartAt,requestedEndAt:input.requestedEndAt??null,
     confirmedStartAt:null,confirmedEndAt:null,customerNotes:input.customerNotes??null,status:'requested',
-    latestQuoteId:null,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()
+    latestQuoteId:null,paymentStatus:'not_required',
+    createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()
   };
   bookings.set(id,booking);
   const timestamp=new Date().toISOString();
