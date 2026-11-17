@@ -144,7 +144,7 @@ export async function finishFinanceReconciliationRun(runId,items,status='complet
     reviewCount:items.filter(item=>['mismatch','manual_review','skipped'].includes(item.outcome)).length,
     errorCount:items.filter(item=>item.outcome==='error').length
   };
-  const finalStatus=status==='failed'?'failed':(counts.errorCount||counts.reviewCount?'partial':'completed');
+  const finalStatus=status==='failed'?'failed':(counts.errorCount||counts.reviewCount||counts.pendingCount?'partial':'completed');
   const summary={...counts,status:finalStatus};
   const result=await queryDatabase(
     'UPDATE finance_reconciliation_runs SET status=$2,scanned_count=$3,matched_count=$4,updated_count=$5,pending_count=$6,review_count=$7,error_count=$8,summary=$9::jsonb,finished_at=now() WHERE id=$1 RETURNING *',
