@@ -266,6 +266,7 @@ export async function createBookingQuote(businessId,bookingId,actorId,input) {
     const selected=await client.query('SELECT id,status,currency_code FROM bookings WHERE id=$1 AND business_id=$2 FOR UPDATE',[bookingId,businessId]);
     const booking=selected.rows[0];
     if (!booking||!['requested','quoted'].includes(booking.status)) return {missing:true};
+    await client.query("UPDATE booking_quotes SET status='expired' WHERE booking_id=$1 AND status='pending' AND expires_at<=now()",[bookingId]);
     const pending=await client.query("SELECT id FROM booking_quotes WHERE booking_id=$1 AND status='pending'",[bookingId]);
     if (pending.rows.length) return {conflict:true};
     const versions=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM booking_quotes WHERE booking_id=$1',[bookingId]);
@@ -283,6 +284,12 @@ export async function createBookingQuote(businessId,bookingId,actorId,input) {
   }
   const booking=await getBusinessBooking(businessId,bookingId);
   if (!booking||!['requested','quoted'].includes(booking.status)) return null;
+  for (const item of quotes.values()) {
+    if (item.bookingId===bookingId && item.status==='pending' && new Date(item.expiresAt)<=new Date()) {
+      item.status='expired';
+      quotes.set(item.id,item);
+    }
+  }
   const existing=[...quotes.values()].find(item=>item.bookingId===bookingId&&item.status==='pending');
   if (existing) return {conflict:true};
   const quote={id:randomUUID(),businessId,bookingId,version:[...quotes.values()].filter(item=>item.bookingId===bookingId).length+1,amountMinor:input.amountMinor,currencyCode:booking.currencyCode,message:input.message??null,expiresAt:input.expiresAt,status:'pending',createdByUserId:actorId,createdAt:new Date().toISOString()};
@@ -364,14 +371,14 @@ export async function cancelCustomerBooking(userId,bookingId,note=null) {
   const result=await withDatabaseTransaction(async client=>{
     const selected=await client.query('SELECT business_id,status,latest_quote_id FROM bookings WHERE id=$1 AND customer_user_id=$2 FOR UPDATE',[bookingId,userId]);
     const row=selected.rows[0];
-    if (!row||!['requested','quoted','confirmed'].includes(row.status)) return null;
+    if (!row||!['requested','quoted','confirmed'].includes(row.status)) return {missing:true};
     if (row.latest_quote_id) await client.query("UPDATE booking_quotes SET status='withdrawn' WHERE id=$1 AND status='pending'",[row.latest_quote_id]);
     const updated=await client.query("UPDATE bookings SET status='cancelled',updated_at=now() WHERE id=$1 AND customer_user_id=$2 RETURNING *",[bookingId,userId]);
     await client.query("INSERT INTO booking_status_events (business_id,booking_id,from_status,to_status,actor_user_id,note) VALUES ($1,$2,$3,'cancelled',$4,$5)",[row.business_id,bookingId,row.status,userId,note]);
     await client.query("INSERT INTO notifications (user_id,notification_type,title,body,resource_type,resource_id) SELECT bm.user_id,'booking_cancelled','Booking cancelled','A customer cancelled a booking.','booking',$1 FROM business_memberships bm WHERE bm.business_id=$2 AND bm.status='active'",[bookingId,row.business_id]);
     return updated.rows[0];
   });
-  if (result!==null) return result?mapBooking(result):null;
+  if (result!==null) return result?.missing ? null : (result ? mapBooking(result) : null);
   const booking=await getCustomerBooking(userId,bookingId);
   if (!booking||!['requested','quoted','confirmed'].includes(booking.status)) return null;
   const previous=booking.status;
