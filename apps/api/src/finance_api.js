@@ -9,7 +9,7 @@ import {
   createBookingReview, listBusinessReviews, listProviderReviews,
   createDispute, getCustomerDispute, getCustomerDisputeById, getBusinessDispute, addDisputeMessage,
   listDisputeMessages, listAdminDisputes, listBusinessDisputes, resolveDispute,
-  getBookingFinancialSummary, recordProviderWebhookEvent
+  getBookingFinancialSummary, recordProviderWebhookEvent, listCustomerPayments, listProviderReviews
 } from './finance_resources.js';
 import { getCustomerBooking, getBusinessBooking } from './marketplace_resources.js';
 import { getCompletedAssignmentForBooking } from './provider_assignments.js';
@@ -278,6 +278,10 @@ async function handleProviderPayoutAccount(req,url,user){
     if(req.method!=='GET')return method(['GET']);
     return ok(await listProviderPayouts(user.id));
   }
+  if(url.pathname==='/api/v1/provider/reviews'){
+    if(req.method!=='GET')return method(['GET']);
+    return ok(await listProviderReviews(user.id));
+  }
   if(url.pathname==='/api/v1/provider/payout-account'){
     if(req.method==='GET')return ok(await getProviderPayoutAccount(user.id));
     if(req.method!=='POST'&&req.method!=='PUT')return method(['GET','POST','PUT']);
@@ -369,6 +373,16 @@ async function handleBusinessTrustRoutes(req,url,user,business){
   if(!business?.businessId||!business?.membership)return fail(400,'BUSINESS_CONTEXT_REQUIRED','A valid business context is required.');
   const role=business.membership.role;
   const canManage=['owner','admin','manager'].includes(role);
+  const paymentMatch=url.pathname.match(/^\/api\/v1\/business\/bookings\/([^/]+)\/payments$/);
+  if(paymentMatch){
+    if(!validId(paymentMatch[1]))return fail(400,'INVALID_ID','Booking ID must be a valid UUID.');
+    if(req.method!=='GET')return method(['GET']);
+    const booking=await getBusinessBooking(business.businessId,paymentMatch[1]);
+    if(!booking)return fail(404,'BOOKING_NOT_FOUND','Booking not found.');
+    if(!['owner','admin','manager'].includes(role))return fail(403,'INSUFFICIENT_ROLE','Only owners, admins and managers can view payment details.');
+    return ok(await getBookingFinancialSummary(business.businessId,booking.id));
+  }
+
   if(url.pathname==='/api/v1/business/reviews'){
     if(req.method!=='GET')return method(['GET']);
     if(!['owner','admin','manager','staff'].includes(role))return fail(403,'BUSINESS_ACCESS_DENIED','You do not have access to this business.');
@@ -384,9 +398,23 @@ async function handleBusinessTrustRoutes(req,url,user,business){
   const disputeMatch=url.pathname.match(/^\/api\/v1\/business\/bookings\/([^/]+)\/dispute$/);
   if(disputeMatch){
     if(!validId(disputeMatch[1]))return fail(400,'INVALID_ID','Booking ID must be a valid UUID.');
-    if(req.method!=='GET')return method(['GET']);
-    const item=await getBusinessDispute(business.businessId,disputeMatch[1]);
-    return ok(item);
+    if(req.method==='GET'){
+      const item=await getBusinessDispute(business.businessId,disputeMatch[1]);
+      return ok(item);
+    }
+    if(req.method!=='POST')return method(['GET','POST']);
+    if(!canManage)return fail(403,'INSUFFICIENT_ROLE','Only owners, admins and managers can open disputes for a business.');
+    const booking=await getBusinessBooking(business.businessId,disputeMatch[1]);
+    if(!booking)return fail(404,'BOOKING_NOT_FOUND','Booking not found.');
+    const body=await readJson(req);const errors=validateDispute(body);
+    if(errors.length)return fail(422,'VALIDATION_ERROR','Dispute validation failed.',errors);
+    const created=await createDispute({
+      id:randomUUID(),bookingId:booking.id,businessId:booking.businessId,
+      userId:user.id,role:'business',category:body.category,
+      description:body.description.trim(),requestedResolution:body.requestedResolution,
+      booking
+    });
+    return created.error?fail(409,'DISPUTE_NOT_AVAILABLE',created.error):ok(created.dispute,201);
   }
   const messages=url.pathname.match(/^\/api\/v1\/business\/disputes\/([^/]+)\/messages$/);
   if(messages){
