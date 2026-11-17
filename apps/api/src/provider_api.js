@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   initializeProviderProfile, getProviderProfile, updateProviderProfile,
   listProviderSkills, replaceProviderSkills, listProviderAreas,
@@ -129,14 +128,6 @@ function validateAssignment(body){
   else if(Date.parse(body.scheduledStartAt)>=Date.parse(body.scheduledEndAt))errors.push('scheduledEndAt must be later than scheduledStartAt.');
   if(body.providerNote!==undefined&&body.providerNote!==null&&(typeof body.providerNote!=='string'||body.providerNote.length>1000))errors.push('providerNote must not exceed 1,000 characters.');
   return errors;
-}
-function adminKeyMatches(req){
-  const expected=process.env.SWIFTSERVE_ADMIN_API_KEY||'';
-  const supplied=req.headers['x-swiftserve-admin-key'];
-  if(!expected||typeof supplied!=='string')return false;
-  const expectedHash=createHash('sha256').update(expected).digest();
-  const suppliedHash=createHash('sha256').update(supplied).digest();
-  return timingSafeEqual(expectedHash,suppliedHash);
 }
 
 async function handleProvider(req,url,user){
@@ -341,7 +332,6 @@ export async function handleProviderApi(req,url,user,business=null){
 }
 
 export async function handleAdminProviderApi(req,url){
-  if(!adminKeyMatches(req))return fail(401,'ADMIN_UNAUTHORIZED','A valid platform admin API key is required.');
   const path=url.pathname;
   if(path==='/api/v1/admin/providers/pending'){
     if(req.method!=='GET')return method(['GET']);
