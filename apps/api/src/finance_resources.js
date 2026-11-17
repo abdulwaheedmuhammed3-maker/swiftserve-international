@@ -281,6 +281,11 @@ export async function updateRefundStatus(reference,status,providerRefundId=null,
     const selected=await client.query('SELECT * FROM refunds WHERE provider_reference=$1 OR provider_refund_id=$1 FOR UPDATE',[reference]);
     const row=selected.rows[0];
     if(!row)return null;
+    const transitions={pending:new Set(['pending','processing','processed','failed']),
+      processing:new Set(['processing','processed','failed']),
+      processed:new Set(['processed']),
+      failed:new Set(['failed'])};
+    if(!transitions[row.status]?.has(status))return mapRefund(row);
     const updated=await client.query(
       "UPDATE refunds SET status=$2,provider_refund_id=COALESCE($3,provider_refund_id),failure_reason=$4,processed_at=CASE WHEN $2='processed' THEN COALESCE(processed_at,now()) ELSE processed_at END,updated_at=now() WHERE id=$1 RETURNING *",
       [row.id,status,providerRefundId,failureReason]
@@ -302,6 +307,11 @@ export async function updateRefundStatus(reference,status,providerRefundId=null,
   }
   const item=[...refunds.values()].find(refund=>refund.reference===reference||refund.providerRefundId===reference);
   if(!item)return null;
+  const transitions={pending:new Set(['pending','processing','processed','failed']),
+    processing:new Set(['processing','processed','failed']),
+    processed:new Set(['processed']),
+    failed:new Set(['failed'])};
+  if(!transitions[item.status]?.has(status))return item;
   item.status=status;
   if(providerRefundId)item.providerRefundId=providerRefundId;
   item.failureReason=failureReason;
@@ -448,6 +458,16 @@ export async function updatePayoutTransfer(id,status,reference,providerTransferI
   const result=await withDatabaseTransaction(async client=>{
     const selected=await client.query('SELECT status FROM provider_payouts WHERE id=$1 FOR UPDATE',[id]);
     if(!selected.rows[0])return null;
+    const transitions={pending:new Set(['pending','processing','failed']),
+      failed:new Set(['failed','processing']),
+      processing:new Set(['processing','paid','failed']),
+      paid:new Set(['paid']),
+      awaiting_payment:new Set(['awaiting_payment','pending','on_hold']),
+      on_hold:new Set(['on_hold','pending'])};
+    if(!transitions[selected.rows[0].status]?.has(status)){
+      const existing=await client.query('SELECT * FROM provider_payouts WHERE id=$1',[id]);
+      return mapPayout(existing.rows[0]);
+    }
     const updated=await client.query(
       "UPDATE provider_payouts SET status=$2,transfer_reference=COALESCE($3,transfer_reference),provider_transfer_id=COALESCE($4,provider_transfer_id),failure_reason=$5,initiated_at=CASE WHEN $2 IN ('processing','paid') THEN COALESCE(initiated_at,now()) ELSE initiated_at END,paid_at=CASE WHEN $2='paid' THEN COALESCE(paid_at,now()) ELSE paid_at END,updated_at=now() WHERE id=$1 RETURNING *",
       [id,status,reference,providerTransferId,failureReason]
@@ -461,6 +481,13 @@ export async function updatePayoutTransfer(id,status,reference,providerTransferI
   if(result!==null)return result;
   const item=payouts.get(id);
   if(!item)return null;
+  const transitions={pending:new Set(['pending','processing','failed']),
+    failed:new Set(['failed','processing']),
+    processing:new Set(['processing','paid','failed']),
+    paid:new Set(['paid']),
+    awaiting_payment:new Set(['awaiting_payment','pending','on_hold']),
+    on_hold:new Set(['on_hold','pending'])};
+  if(!transitions[item.status]?.has(status))return item;
   item.status=status;
   if(reference)item.transferReference=reference;
   if(providerTransferId)item.providerTransferId=providerTransferId;
@@ -590,6 +617,15 @@ export async function listBusinessDisputes(businessId){
   );
   if(result)return result.rows.map(mapDispute);
   return [...disputes.values()].filter(item=>item.businessId===businessId);
+}
+
+export async function hasProviderWebhookEvent(provider,eventKey){
+  const result=await queryDatabase(
+    'SELECT 1 FROM provider_webhook_events WHERE provider=$1 AND event_key=$2 LIMIT 1',
+    [provider,eventKey]
+  );
+  if(result)return Boolean(result.rows[0]);
+  return webhookEvents.has(provider+':'+eventKey);
 }
 
 export async function recordProviderWebhookEvent(provider,eventKey,eventType,payloadHash){
