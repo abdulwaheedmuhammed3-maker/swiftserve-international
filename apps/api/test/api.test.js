@@ -1349,3 +1349,33 @@ test('provider onboarding, verification, invitation, assignment and job completi
     else process.env.SWIFTSERVE_ADMIN_API_KEY=previousAdminKey;
   }
 });
+
+
+test('payment endpoints fail closed without gateway configuration and reject unsigned webhooks', async () => {
+  const previousSecret=process.env.PAYSTACK_SECRET_KEY;
+  delete process.env.PAYSTACK_SECRET_KEY;
+  const server=await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const customer=await registerCustomer(base,'payment-disabled-customer@example.com','Payment Test Customer');
+
+    const payment=await request(base,'/api/v1/customer/bookings/123e4567-e89b-42d3-a456-426614174000/payments',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({})
+    });
+    assert.equal(payment.status,503);
+    assert.equal(payment.body.error.code,'PAYMENT_GATEWAY_NOT_CONFIGURED');
+
+    const webhook=await request(base,'/api/v1/webhooks/paystack',{
+      method:'POST',
+      body:JSON.stringify({event:'charge.success',data:{reference:'untrusted'}})
+    });
+    assert.equal(webhook.status,401);
+    assert.equal(webhook.body.error.code,'INVALID_SIGNATURE');
+  } finally {
+    await stopTestServer(server);
+    if(previousSecret===undefined)delete process.env.PAYSTACK_SECRET_KEY;
+    else process.env.PAYSTACK_SECRET_KEY=previousSecret;
+  }
+});
