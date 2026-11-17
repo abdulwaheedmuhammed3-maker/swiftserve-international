@@ -32,6 +32,7 @@ function mapBooking(row) {
     customerLocationId:row.customer_location_id, serviceName:row.service_name_snapshot,
     serviceCategory:row.service_category_snapshot, pricingModel:row.pricing_model_snapshot,
     currencyCode:row.currency_code,
+    servicePriceMinor:row.service_price_minor_snapshot===null?null:Number(row.service_price_minor_snapshot),
     serviceAddress:{
       recipientName:row.service_address_recipient, phoneE164:row.service_address_phone,
       countryCode:row.service_country_code, addressLine1:row.service_address_line1,
