@@ -20,7 +20,8 @@ Never paste database credentials into chat, commit them to GitHub, or place them
 - [x] Provider profiles, skills, coverage areas, weekly availability and business links.
 - [x] Provider invitation, verification review and booking assignment tables.
 - [x] Payment intents/events, refunds, provider payout accounts/ledger, reviews and disputes.
-- [ ] Apply migrations 001–006 to the actual development database.
+- [x] Administrator audit records, reconciliation runs and per-record reconciliation outcomes.
+- [ ] Apply migrations 001–007 to the actual development database.
 - [x] Add an ordered migration runner with checksums and applied-migration history.
 - [x] Add PostgreSQL integration tests for accounts, sessions and business isolation in CI.
 - [ ] Verify records survive API restarts.
@@ -92,7 +93,7 @@ The booking record snapshots the service name, category, pricing model, currency
 
 Composite foreign keys enforce that the service and branch belong to the same business, that a saved location belongs to the customer making the booking, and that quotes/status events belong to the booking's business. A customer cannot attach another customer's saved location or another business's branch through a guessed UUID.
 
-The current schema has no payment intent or provider assignment table yet. No payment is collected by the current booking flow. It also does not implement a slot-capacity ledger; business opening hours and coverage areas are used for validation, but simultaneous booking conflicts require a later availability/capacity phase.
+Migration 004 by itself does not include payment intent or provider assignment tables; those were added in migrations 005 and 006. The booking flow still does not reserve provider capacity. The schema also does not implement a slot-capacity ledger; business opening hours and coverage areas are used for validation, but simultaneous booking conflicts require a later availability/capacity phase.
 
 ## Provider operations data model
 
@@ -111,7 +112,7 @@ A booking assignment has composite foreign keys to its booking and business-prov
 
 The assignment API verifies active business membership, provider verification/onboarding state, service skill, coverage area and weekly availability in the provider's configured time zone. This is not a full provider capacity engine: travel time, job buffers, business slot capacity, rescheduling and multi-day/overnight schedules are not implemented.
 
-Provider verification currently records a manual review decision. No identity-document file storage, biometric checks, background-check vendor or automated KYC integration is implemented. The admin review route uses the SWIFTSERVE_ADMIN_API_KEY secret as an initial administrative gate; a full admin user/role and review audit identity system remains future work.
+Provider verification currently records a manual review decision. No identity-document file storage, biometric checks, background-check vendor or automated KYC integration is implemented. The admin review route uses the SWIFTSERVE_ADMIN_API_KEY secret as an initial administrative gate. Migration 007 records administrative actions under a configured non-secret key label; this labels a credential and does not identify the human using it. Individual admin accounts, roles, MFA and human-level attribution remain future work.
 
 Provider invitations store token hashes. As no outbound email provider is connected, the raw token is returned once to the business user for private sharing. Acceptance requires a signed-in provider account whose email matches the invitation.
 
@@ -135,6 +136,18 @@ Provider payout recipients currently support NGN NUBAN bank accounts. The API se
 
 Reviews require a completed booking and a unique booking/customer pair. Disputes can be opened by the customer or business on eligible bookings and retain messages and resolution state. Recording a dispute resolution does not itself execute a refund; an authorized business user must submit a refund separately.
 
+## Admin audit and finance reconciliation data model
+
+Migration 007 adds:
+
+- admin_audit_logs: successful/failed/denied platform-admin actions with a credential label, action name, target type/ID, limited JSON details and timestamp;
+- finance_reconciliation_runs: one Paystack reconciliation attempt with initiator key label, lifecycle status and counts for matched, updated, pending, review and error outcomes;
+- finance_reconciliation_items: one row per inspected payment, payout or refund, including local/provider status, reference, amount/currency comparison, outcome and a sanitized provider response snapshot.
+
+Migration 007 also adds the reversed status to provider_payouts and a last_reconciled_at timestamp. A verified transfer reversal is retained as reversed rather than flattened into failed. The reconciliation runner verifies pending payment intents and processing/failed transfers against Paystack. It can update a local payment or payout when provider evidence is conclusive. It never repeats a transfer or creates a refund. Pending refunds are marked for manual review and rely on signed refund webhooks for settlement updates.
+
+Admin audit records currently identify the configured SWIFTSERVE_ADMIN_ACTOR_ID credential label (default shared-admin-key). This is not a human identity. The API is still protected by a shared SWIFTSERVE_ADMIN_API_KEY rather than individual admin accounts and role-based authorization. Do not treat these audit rows as non-repudiable individual-user evidence.
+
 ## Existing data and backfill
 
 Migration 002 deliberately adds nullable business ownership columns to existing service_requests. It does not automatically assign old requests to a new business. Requests with NULL business_id are not visible in the authenticated business API.
@@ -146,7 +159,7 @@ Before retaining old records, identify their true owner and use a reviewed, audi
 1. Create a development PostgreSQL database with your chosen managed provider.
 2. Copy apps/api/.env.example to apps/api/.env.
 3. Set DATABASE_URL in the local environment. Do not commit the .env file.
-4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001–006 in order.
+4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001–007 in order.
 5. Start the API and open /readyz. It should report PostgreSQL storage when the connection succeeds.
 6. Register a test business, create a service, branch and coverage area; register a test customer, save an address and request a booking.
 7. Register a provider, add skills, areas and availability, submit for review and approve using the configured admin secret.
@@ -165,9 +178,9 @@ Use the connection string format recommended by Supabase for the hosting environ
 - Create a least-privilege database role for the API.
 - Keep development and production databases separate.
 - Enable automated backups and test restoration.
-- Run the migration runner and verify all six schema versions against the actual development database.
+- Run the migration runner and verify all seven schema versions against the actual development database.
 - Verify customer address ownership, booking isolation, quote lifecycle, provider verification, invitations, assignment authorization and schedule conflicts against the deployed PostgreSQL environment.
-- Complete a Paystack test-mode checkout, refund and transfer using the intended webhook configuration; reconcile the resulting gateway events and SwiftServe ledger.
+- Complete a Paystack test-mode checkout, refund and transfer using the intended webhook configuration; run finance reconciliation, inspect pending/manual-review outcomes and reconcile the resulting gateway events and SwiftServe ledger.
 - Enforce business ownership in every read and write query.
 - Establish data minimization, retention and deletion practices.
 - Review session expiry, revocation and device token storage.
