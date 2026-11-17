@@ -219,6 +219,7 @@ export async function listBusinessProviders(businessId) {
       const profile=profiles.get(item.providerUserId)||{};
       return {
         ...item,
+        userId:item.providerUserId,
         email:profile.email??null,
         fullName:profile.fullName??profile.displayName??null,
         displayName:profile.displayName??null,
