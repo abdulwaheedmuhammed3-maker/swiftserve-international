@@ -81,13 +81,13 @@ CREATE TABLE IF NOT EXISTS bookings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT bookings_service_scope_fk
     FOREIGN KEY (business_id, service_id)
-    REFERENCES business_services (business_id, id) ON DELETE SET NULL,
+    REFERENCES business_services (business_id, id) ON DELETE RESTRICT,
   CONSTRAINT bookings_branch_scope_fk
     FOREIGN KEY (business_id, branch_id)
-    REFERENCES business_branches (business_id, id) ON DELETE SET NULL,
+    REFERENCES business_branches (business_id, id) ON DELETE RESTRICT,
   CONSTRAINT bookings_customer_location_scope_fk
     FOREIGN KEY (customer_user_id, customer_location_id)
-    REFERENCES customer_locations (customer_user_id, id) ON DELETE SET NULL,
+    REFERENCES customer_locations (customer_user_id, id) ON DELETE RESTRICT,
   CONSTRAINT bookings_requested_window_check CHECK (
     requested_end_at IS NULL OR requested_end_at > requested_start_at
   ),
@@ -143,7 +143,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS booking_quotes_one_pending_idx
 ALTER TABLE bookings
   ADD CONSTRAINT bookings_latest_quote_scope_fk
   FOREIGN KEY (business_id, latest_quote_id)
-  REFERENCES booking_quotes (business_id, id) ON DELETE SET NULL;
+  REFERENCES booking_quotes (business_id, id) ON DELETE RESTRICT;
 
 CREATE TABLE IF NOT EXISTS booking_status_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
