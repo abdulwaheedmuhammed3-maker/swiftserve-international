@@ -519,6 +519,13 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     });
     assert.equal(verified.status, 200);
     assert.equal(verified.body.data.verificationStatus, 'verified');
+    const providerReviewAudit=await pool.query(
+      "SELECT actor_key_id,action FROM admin_audit_logs WHERE target_type='provider' AND target_id=$1",
+      [providerUser.id]
+    );
+    assert.equal(providerReviewAudit.rows.length,1);
+    assert.equal(providerReviewAudit.rows[0].actor_key_id,'swiftserve-ci-admin');
+    assert.equal(providerReviewAudit.rows[0].action,'provider.verification.reviewed');
 
     const payoutAccount=await call('/api/v1/provider/payout-account',{
       method:'POST',
@@ -838,6 +845,8 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     await new Promise(resolve => server.close(resolve));
     paystackMock.closeAllConnections?.();
     await new Promise(resolve => paystackMock.close(resolve));
+    await pool.query("DELETE FROM finance_reconciliation_runs WHERE actor_key_id='swiftserve-ci-admin'");
+    await pool.query("DELETE FROM admin_audit_logs WHERE actor_key_id='swiftserve-ci-admin'");
     if (businessIds.length) {
       await pool.query('DELETE FROM dispute_messages WHERE dispute_id IN (SELECT id FROM disputes WHERE business_id=ANY($1::uuid[]))',[businessIds]);
       await pool.query('DELETE FROM dispute_events WHERE dispute_id IN (SELECT id FROM disputes WHERE business_id=ANY($1::uuid[]))',[businessIds]);
