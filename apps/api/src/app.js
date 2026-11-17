@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { handleBusinessApi } from './business_api.js';
-import { handleMarketplaceApi } from './marketplace_api.js';
+import { handleMarketplaceApi, handleNotificationApi } from './marketplace_api.js';
 import { acceptInvitation } from './business_resources.js';
 import {
   authenticateAccessToken,
@@ -438,6 +438,22 @@ export async function requestHandler(req, res) {
       return json(res, response.status, response.body);
     } catch (error) {
       logSafeError('customer_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/notifications' || url.pathname.startsWith('/api/v1/notifications/')) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const response = await handleNotificationApi(req, url, authenticated.user);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('notification_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
     }
   }
