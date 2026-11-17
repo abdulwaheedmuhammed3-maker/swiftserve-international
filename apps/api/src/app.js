@@ -472,7 +472,7 @@ export async function requestHandler(req, res) {
     }
   }
 
-  if (/^\/api\/v1\/admin\/(?:payouts|disputes)(?:\/|$)/.test(url.pathname)) {
+  if (/^\/api\/v1\/admin\/(?:payouts|disputes|audit-logs|finance)(?:\/|$)/.test(url.pathname)) {
     try {
       const outcome = await handleAdminFinanceApi(req, url);
       if (outcome.noContent) {

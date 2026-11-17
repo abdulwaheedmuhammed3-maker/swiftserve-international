@@ -35,11 +35,14 @@ The Android application is currently a limited business workspace. The backend i
 - Customer profiles and private saved service locations.
 - Tenant-scoped booking requests, immutable address/price snapshots, quote history and status events.
 - In-app notifications for new bookings, quotes, quote responses, status changes and cancellations.
-- Checksum-verified migrations 001–006 and PostgreSQL 16 CI integration tests.
+- Checksum-verified migrations 001–007 and PostgreSQL 16 CI integration tests.
 - Paystack payment initialization, server-side transaction verification and signed webhook handling.
 - Full/partial refund records and gateway-state updates.
 - Provider payout-recipient registration, completed-job payout ledger, platform-fee calculation and administrator-triggered transfers.
 - Customer reviews for completed bookings and customer/business disputes with conversation and admin resolution records.
+- Persistent administrator audit events with credential-key labels and bounded metadata.
+- Paystack reconciliation runs for pending payments and unresolved payout transfers, with stored item-level outcomes and sanitized provider snapshots.
+- Explicit reversed provider-payout state and reconciliation timestamps.
 - Provider account registration and provider profiles with service skills, service areas and weekly availability.
 - Manual provider verification request/review workflow protected by a server-side admin API key.
 - Business-provider invitation and membership workflow.
@@ -60,9 +63,11 @@ The Android application is currently a limited business workspace. The backend i
 - Payments use a Paystack adapter but no live Paystack merchant account or production webhook has been configured or verified; CI uses a local mock gateway.
 - Provider payout recipient registration currently supports Nigerian NGN NUBAN accounts only. Payout transfers are administrator-triggered, not scheduled automatically.
 - Dispute resolution records an administrative outcome but does not automatically execute a refund; refunds are a separate business action.
+- Refund settlement is received through signed Paystack refund webhooks. The reconciliation runner flags pending refunds for manual review rather than polling them or creating another refund.
+- The admin API still uses one shared API key. Audit records use a non-secret credential label and do not prove which individual administrator performed an action.
 - Provider and business invitation tokens are returned once for private out-of-band sharing; no email delivery provider is configured.
 - Assignment checks provider schedule overlaps, but there is no full business slot-capacity/booking conflict engine or rescheduling flow.
-- No payment collection, provider payouts, reviews, disputes or refunds yet.
+- Customer/admin payment and trust endpoints do not yet have a corresponding complete customer/provider Android experience.
 
 ## Identity and authorization model
 
@@ -106,11 +111,22 @@ Customers can review a completed booking once. Customers and businesses can open
 
 No live gateway credentials are stored in the repository. CI uses a local mock Paystack-compatible HTTP server to exercise initialization, verification, refund, transfer, webhook signature and payout workflows. The mock verifies integration behaviour; it is not evidence of live Paystack settlement or production deployment.
 
+## Platform administration and reconciliation model
+
+Migration 007 adds admin_audit_logs, finance_reconciliation_runs and finance_reconciliation_items. Protected administrator routes expose recent audit events, a finance operations summary, reconciliation run history and individual run details. Audit rows store a non-secret admin-key label rather than the key itself, the action and target, an outcome, limited metadata and a timestamp.
+
+A reconciliation run is bounded to 1–50 records. It verifies pending payment intents and processing/failed provider transfers using the Paystack transaction/transfer verification endpoints. A conclusive result can update the local payment or payout state; a reversal is retained as a separate payout state. Non-terminal statuses remain pending. Amount, currency and reference mismatches are surfaced for review rather than silently overwritten. Each result is stored with a sanitized gateway snapshot.
+
+Pending refunds are flagged for manual review because refund settlement is currently driven by signed Paystack refund webhooks. The reconciliation process never initiates a refund or submits a second payout transfer. A local transfer that is processing or failed is verified before an administrator can attempt any further transfer action.
+
+The audit model is intentionally limited while the platform uses a shared admin API key. SWIFTSERVE_ADMIN_ACTOR_ID labels the credential, defaults to shared-admin-key and is not a human identity. Individual administrator accounts, roles, MFA and human-attributable audit trails remain future work.
+
+
 ## Provider operations model
 
 Provider accounts use the provider account type and have a provider_profiles record. Providers maintain service skills, coverage areas and weekly availability. A provider must complete those sections and submit their profile for review before the manual verification state can be approved.
 
-The current manual review API is protected by the SWIFTSERVE_ADMIN_API_KEY runtime secret. The key is supplied through an admin header and is never stored in the repository or mobile apps. This is an initial admin gate, not a full platform-admin identity/role system. Provider identity documents are not uploaded or stored in this phase, so the verified status is an explicit operational review decision rather than automated KYC.
+The current manual review API is protected by the SWIFTSERVE_ADMIN_API_KEY runtime secret. The key is supplied through an admin header and is never stored in the repository or mobile apps. Administrative decisions are written to admin_audit_logs using a configured non-secret key label, but this is not a full platform-admin identity/role system and does not identify the individual human using a shared key. Provider identity documents are not uploaded or stored in this phase, so the verified status is an explicit operational review decision rather than automated KYC.
 
 Businesses can invite provider accounts by email. The invitation token is stored as a hash and is returned once to the authorized business user because automated email delivery is not configured. The invited provider must accept while signed in with the invited email. Acceptance creates a business-provider membership.
 

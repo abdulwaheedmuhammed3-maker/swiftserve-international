@@ -14,6 +14,7 @@ import {
 } from './provider_assignments.js';
 import { getBusinessBooking } from './marketplace_resources.js';
 import { queryDatabase } from './repository.js';
+import { writeAdminAuditEvent } from './admin_resources.js';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -360,6 +361,10 @@ export async function handleAdminProviderApi(req,url){
     if(body.note!==undefined&&body.note!==null&&(typeof body.note!=='string'||body.note.length>1000))errors.push('note must not exceed 1,000 characters.');
     if(errors.length)return fail(422,'VALIDATION_ERROR','Provider verification review validation failed.',errors);
     const profile=await reviewProviderVerification(match[1],body.status,body.note??null);
+    if(profile)await writeAdminAuditEvent({
+      action:'provider.verification.reviewed',targetType:'provider',targetId:match[1],
+      details:{verificationStatus:body.status,noteProvided:Boolean(body.note)}
+    });
     return profile?ok(profile):fail(404,'PROVIDER_NOT_FOUND','Provider profile not found.');
   }
   return fail(404,'NOT_FOUND','Admin provider route not found.');

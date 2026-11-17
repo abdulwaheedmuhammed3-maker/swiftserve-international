@@ -13,7 +13,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
 
   const envKeys = [
     'PAYSTACK_SECRET_KEY','PAYSTACK_WEBHOOK_SECRET','PAYSTACK_API_BASE_URL',
-    'PAYSTACK_CALLBACK_URL','SWIFTSERVE_ADMIN_API_KEY','SWIFTSERVE_PLATFORM_FEE_BPS'
+    'PAYSTACK_CALLBACK_URL','SWIFTSERVE_ADMIN_API_KEY','SWIFTSERVE_ADMIN_ACTOR_ID','SWIFTSERVE_PLATFORM_FEE_BPS'
   ];
   const previousEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
   const gatewayState = { reference: null, amount: null, currency: null, transferReference: null, transactionStatus: 'success', transferStatus: 'pending', transferCalls: 0 };
@@ -67,6 +67,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
   process.env.PAYSTACK_WEBHOOK_SECRET='swiftserve_mock_webhook_secret';
   process.env.PAYSTACK_API_BASE_URL='http://127.0.0.1:'+paystackMock.address().port;
   process.env.SWIFTSERVE_ADMIN_API_KEY='swiftserve-ci-admin-key';
+  process.env.SWIFTSERVE_ADMIN_ACTOR_ID='swiftserve-ci-admin';
   process.env.SWIFTSERVE_PLATFORM_FEE_BPS='1000';
 
   const { requestHandler } = await import('../src/app.js');
@@ -518,6 +519,13 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     });
     assert.equal(verified.status, 200);
     assert.equal(verified.body.data.verificationStatus, 'verified');
+    const providerReviewAudit=await pool.query(
+      "SELECT actor_key_id,action FROM admin_audit_logs WHERE target_type='provider' AND target_id=$1",
+      [providerUser.id]
+    );
+    assert.equal(providerReviewAudit.rows.length,1);
+    assert.equal(providerReviewAudit.rows[0].actor_key_id,'swiftserve-ci-admin');
+    assert.equal(providerReviewAudit.rows[0].action,'provider.verification.reviewed');
 
     const payoutAccount=await call('/api/v1/provider/payout-account',{
       method:'POST',
@@ -626,6 +634,47 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(payoutRetryWhilePending.body.data.status,'processing');
     assert.equal(gatewayState.transferCalls,1);
 
+    const simulateMissedPaymentCallback=await pool.query(
+      "UPDATE payment_intents SET status='pending',updated_at=now() WHERE id=$1 RETURNING id",
+      [payment.body.data.id]
+    );
+    assert.equal(simulateMissedPaymentCallback.rowCount,1);
+
+    gatewayState.transactionStatus='success';
+    gatewayState.transferStatus='success';
+    const reconciliation=await call('/api/v1/admin/finance/reconciliation',{
+      method:'POST',
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'},
+      body:JSON.stringify({limit:20})
+    });
+    assert.equal(reconciliation.status,201);
+    assert.equal(reconciliation.body.data.run.status,'completed');
+    assert.equal(reconciliation.body.data.run.scannedCount,2);
+    assert.equal(reconciliation.body.data.run.updatedCount,2);
+    assert.deepEqual(reconciliation.body.data.items.map(item=>item.entityType),['payment','payout']);
+    assert.ok(reconciliation.body.data.items.every(item=>item.outcome==='updated'));
+
+    const reconciliationDetail=await call('/api/v1/admin/finance/reconciliation/'+reconciliation.body.data.run.id,{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(reconciliationDetail.status,200);
+    assert.equal(reconciliationDetail.body.data.items.length,2);
+    assert.ok(reconciliationDetail.body.data.items.every(item=>item.providerStatus==='success'));
+
+    const financeSummary=await call('/api/v1/admin/finance/summary',{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(financeSummary.status,200);
+    assert.equal(financeSummary.body.data.processing_payouts,0);
+
+    const auditLogs=await call('/api/v1/admin/audit-logs?limit=100',{
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-ci-admin-key'}
+    });
+    assert.equal(auditLogs.status,200);
+    assert.ok(auditLogs.body.data.some(item=>item.action==='finance.payout.transfer_requested'));
+    assert.ok(auditLogs.body.data.some(item=>item.action==='finance.reconciliation.completed'));
+    assert.ok(auditLogs.body.data.every(item=>item.actorKeyId==='swiftserve-ci-admin'));
+
     const transferWebhook=await sendPaystackWebhook({
       event:'transfer.success',
       data:{
@@ -664,6 +713,21 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     });
     assert.equal(refundAfterPayout.status,409);
     assert.equal(refundAfterPayout.body.error.code,'REFUND_NOT_AVAILABLE');
+
+    const transferReversed=await sendPaystackWebhook({
+      event:'transfer.reversed',
+      data:{
+        id:123456789,
+        reference:gatewayState.transferReference,
+        status:'reversed',
+        amount:225000,
+        currency:'NGN'
+      }
+    });
+    assert.equal(transferReversed.status,200);
+    const reversedPayouts=await call('/api/v1/provider/payouts',{headers:providerHeaders});
+    assert.equal(reversedPayouts.status,200);
+    assert.equal(reversedPayouts.body.data[0].status,'reversed');
 
     const review=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/review',{
       method:'POST',
@@ -788,6 +852,8 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     await new Promise(resolve => server.close(resolve));
     paystackMock.closeAllConnections?.();
     await new Promise(resolve => paystackMock.close(resolve));
+    await pool.query("DELETE FROM finance_reconciliation_runs WHERE actor_key_id='swiftserve-ci-admin'");
+    await pool.query("DELETE FROM admin_audit_logs WHERE actor_key_id='swiftserve-ci-admin'");
     if (businessIds.length) {
       await pool.query('DELETE FROM dispute_messages WHERE dispute_id IN (SELECT id FROM disputes WHERE business_id=ANY($1::uuid[]))',[businessIds]);
       await pool.query('DELETE FROM dispute_events WHERE dispute_id IN (SELECT id FROM disputes WHERE business_id=ANY($1::uuid[]))',[businessIds]);

@@ -103,6 +103,23 @@ SwiftServe is being developed as an international household-services platform. T
 
 **Exit condition:** the platform can safely support a real pilot with clear financial and dispute records. Passing CI does not mean live payments, bank transfers, provider KYC or production operations have been verified.
 
+## Phase 7 — Platform administration, audit and finance reconciliation
+
+- [x] Add a persistent administrator audit log for protected provider-review, payout, dispute and reconciliation actions.
+- [x] Label audit events with a non-secret admin-key identifier; never store the key itself.
+- [x] Add an admin finance summary for pending payments/refunds/payouts, reversals and open disputes.
+- [x] Add bounded, administrator-triggered Paystack reconciliation runs with item-level results.
+- [x] Verify pending payment intents and unresolved payout transfers against Paystack before changing local status.
+- [x] Preserve provider payout reversals as a distinct financial state.
+- [x] Prevent reconciliation from automatically creating refunds or repeating payout transfers.
+- [x] Add CI coverage for reconciliation, audit actor labels and transfer reversal events.
+- [ ] Replace shared admin-key access with individual administrator accounts, roles, MFA and human-level attribution.
+- [ ] Add alerts and scheduled reconciliation with operational escalation.
+- [ ] Add automated refund-status polling or statement import after a safe provider integration is selected.
+- [ ] Add financial reporting exports and a formal settlement approval/reconciliation procedure.
+
+**Exit condition:** administrator operations are auditable by credential, finance mismatches are visible, and payment/payout state is reconciled against verified provider evidence. Individual admin accountability and live financial operations still require separate completion.
+
 ## Stage 5 — Pilot, pricing and market expansion
 
 - [ ] Interview at least 15 local service-business owners.

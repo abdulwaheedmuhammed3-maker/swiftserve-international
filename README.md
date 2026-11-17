@@ -55,6 +55,7 @@ The current migrations are:
 4. apps/api/db/migrations/004_customer_bookings.sql
 5. apps/api/db/migrations/005_provider_operations.sql
 6. apps/api/db/migrations/006_finance_reviews_disputes.sql
+7. apps/api/db/migrations/007_admin_audit_reconciliation.sql
 
 For Render, the API start command can run migrations before starting the server:
 
@@ -64,7 +65,7 @@ The server checks that the required migration records and tables exist before it
 
 Never commit .env files or real credentials. In production, DATABASE_URL is required and the API refuses to start without it. The server checks the configured database and required core tables before listening. A missing migration makes database readiness fail. Without DATABASE_URL in development, the API uses temporary in-memory storage; those records disappear when the process stops.
 
-Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Migration 003 adds business profiles, branches, service catalogues, opening hours, service coverage and team invitations. Migration 004 adds customer profiles and saved locations, service bookings, quote history, booking status events and in-app notifications. Migration 005 adds provider profiles, skills, service areas, weekly availability, business-provider memberships, provider invitations and booking assignments. Migration 006 adds payment intents/events, refunds, provider payout accounts and ledger entries, reviews and dispute records/messages/events. Existing requests from before migration 002 have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
+Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Migration 003 adds business profiles, branches, service catalogues, opening hours, service coverage and team invitations. Migration 004 adds customer profiles and saved locations, service bookings, quote history, booking status events and in-app notifications. Migration 005 adds provider profiles, skills, service areas, weekly availability, business-provider memberships, provider invitations and booking assignments. Migration 006 adds payment intents/events, refunds, provider payout accounts and ledger entries, reviews and dispute records/messages/events. Migration 007 adds administrator audit logs, finance reconciliation runs/items and explicit reversed-payout state. Existing requests from before migration 002 have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
 
 ### Authentication endpoints
 
@@ -196,7 +197,7 @@ Provider invitation delivery is not automated. The API returns the invitation to
 | GET | /api/v1/admin/providers/pending | List providers awaiting review |
 | PATCH | /api/v1/admin/providers/:userId/verification | Approve or reject a provider |
 
-The admin key must never be committed to GitHub or placed in Android/mobile code. Provider identity-document file uploads and storage are not implemented in this phase; approval is an operational review flag, not automated identity verification.
+The admin key must never be committed to GitHub or placed in Android/mobile code. Provider identity-document file uploads and storage are not implemented; approval is an operational review flag, not automated identity verification. Admin-key actions are recorded in the audit log under the configured key label. Since the current system uses a shared API key rather than individual administrator accounts, the label identifies a credential, not the human who used it.
 
 ### Payments, refunds and provider payouts
 
@@ -208,7 +209,8 @@ Online payment collection is implemented through a server-side Paystack adapter.
 | PAYSTACK_SECRET_KEY | Server-side Paystack secret key |
 | PAYSTACK_WEBHOOK_SECRET | Paystack webhook HMAC secret (or PAYSTACK_WEBHOOK_SECRETS for rotated keys) |
 | PAYSTACK_CALLBACK_URL | Optional checkout return URL |
-| SWIFTSERVE_ADMIN_API_KEY | Protected manual provider-review, payout and dispute administration |
+| SWIFTSERVE_ADMIN_API_KEY | Shared secret protecting provider review, payout, dispute, audit and reconciliation administration |
+| SWIFTSERVE_ADMIN_ACTOR_ID | Optional non-secret label identifying which admin key was used in audit logs; defaults to shared-admin-key and does not identify an individual person |
 | SWIFTSERVE_PLATFORM_FEE_BPS | Platform fee in basis points; defaults to 0 and is capped at 5,000 (50%) |
 
 Never add gateway or admin secrets to Android, frontend code, GitHub source files, screenshots or client responses. Start with Paystack test credentials and a test account. The API accepts payment success only after its server verifies the transaction reference, amount and currency with Paystack. A browser return or unsigned webhook cannot mark a payment successful.
@@ -262,9 +264,27 @@ The current payout-account registration supports Nigerian Naira (NGN) NUBAN bank
 
 Reviews require a completed booking and are limited to one review per booking. Dispute messages are scoped to the booking's customer or business. The current dispute workflow records status and resolution decisions; it does not automatically issue a refund, adjudicate uploaded evidence, or provide a complete support case-management interface.
 
+### Platform administration, audit and reconciliation
+
+Migration 007 adds a persistent admin audit trail, reconciliation run history and item-level reconciliation results. Successful administrator actions for provider verification, dispute decisions, payout initiation and financial reconciliation are recorded with a non-secret actor-key label, action, target, outcome and limited metadata.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | /api/v1/admin/audit-logs?limit=50 | List recent administrator audit events (admin key required) |
+| GET | /api/v1/admin/finance/summary | View pending payments/refunds/payouts, reversals and open disputes |
+| GET | /api/v1/admin/finance/reconciliation | List recent reconciliation runs |
+| POST | /api/v1/admin/finance/reconciliation | Verify up to 50 pending payments, unresolved transfers and pending refunds |
+| GET | /api/v1/admin/finance/reconciliation/:runId | Inspect reconciliation results for a run |
+
+A reconciliation run verifies pending payment intents and processing/failed payout transfers directly with Paystack. Verified payment success or terminal failure can update the local ledger; transfer success, failure or reversal can update payout status. An unresolved transfer is never re-sent automatically. Pending refund entries are flagged for manual review because this first version relies on signed Paystack refund webhooks for refund settlement; the reconciliation runner does not create or repeat refunds.
+
+POST reconciliation accepts an optional JSON body such as {"limit":25}. The limit is bounded to 1–50 and the endpoint requires PAYSTACK_SECRET_KEY. Each run stores the local and provider statuses, amount/currency comparison, outcome and a sanitized provider response snapshot. Outcomes include matched, updated, pending, mismatch, manual_review and error. Review/error/pending outcomes cause the run to be marked partial rather than silently complete.
+
+The audit actor label is not an identity system. Full administrator accounts, individual attribution, role-based permissions, MFA and key rotation/management remain future work. Never expose the admin key in a mobile app or browser.
+
 ### Finance and trust limitations
 
-Phase 6 has been designed and tested against a local mock Paystack server in CI. That verifies the API workflow, not a live Paystack merchant account, live settlement, bank transfers or a deployed webhook. No production gateway secret has been added. Before accepting real money, apply migration 006 to the intended development database, configure Paystack test credentials and webhooks, complete a real sandbox payment/refund/transfer test, reconcile gateway statements, and review the supported countries/currencies and payout compliance for the launch market.
+Phases 6 and 7 have been tested against a local mock Paystack server in CI. That verifies the API workflow, not a live Paystack merchant account, live settlement, bank transfers or a deployed webhook. No production gateway secret has been added. Before accepting real money, apply migration 006 to the intended development database, configure Paystack test credentials and webhooks, complete a real sandbox payment/refund/transfer test, reconcile gateway statements, and review the supported countries/currencies and payout compliance for the launch market.
 
 ### Health checks
 
@@ -275,7 +295,7 @@ The simple authentication throttle is process-local. Before horizontal scaling o
 
 ## CI
 
-The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies migrations 001–006, runs API HTTP/unit regression tests and runs PostgreSQL integration tests for identity, business isolation, customer locations, service bookings, provider operations, Paystack payment verification, partial refunds, provider transfers, reviews and disputes. The finance integration test uses a local mock gateway and does not contact Paystack. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
+The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies migrations 001–007, runs API HTTP/unit regression tests and runs PostgreSQL integration tests for identity, business isolation, customer locations, service bookings, provider operations, Paystack payment verification, partial refunds, provider transfers and reversals, reviews, disputes, admin audit events and finance reconciliation. The finance integration test uses a local mock gateway and does not contact Paystack. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
 
 ## Development roadmap
 

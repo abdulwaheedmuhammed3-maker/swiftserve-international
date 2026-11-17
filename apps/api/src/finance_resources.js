@@ -465,10 +465,11 @@ export async function updatePayoutTransfer(id,status,reference,providerTransferI
   const result=await withDatabaseTransaction(async client=>{
     const selected=await client.query('SELECT status FROM provider_payouts WHERE id=$1 FOR UPDATE',[id]);
     if(!selected.rows[0])return null;
-    const transitions={pending:new Set(['pending','processing','failed']),
-      failed:new Set(['failed','processing']),
-      processing:new Set(['processing','paid','failed']),
-      paid:new Set(['paid']),
+    const transitions={pending:new Set(['pending','processing','failed','reversed']),
+      failed:new Set(['failed','processing','paid','reversed']),
+      processing:new Set(['processing','paid','failed','reversed']),
+      paid:new Set(['paid','reversed']),
+      reversed:new Set(['reversed']),
       awaiting_payment:new Set(['awaiting_payment','pending','on_hold']),
       on_hold:new Set(['on_hold','pending'])};
     if(!transitions[selected.rows[0].status]?.has(status)){
@@ -488,10 +489,11 @@ export async function updatePayoutTransfer(id,status,reference,providerTransferI
   if(result!==null)return result;
   const item=payouts.get(id);
   if(!item)return null;
-  const transitions={pending:new Set(['pending','processing','failed']),
-    failed:new Set(['failed','processing']),
-    processing:new Set(['processing','paid','failed']),
-    paid:new Set(['paid']),
+  const transitions={pending:new Set(['pending','processing','failed','reversed']),
+    failed:new Set(['failed','processing','paid','reversed']),
+    processing:new Set(['processing','paid','failed','reversed']),
+    paid:new Set(['paid','reversed']),
+    reversed:new Set(['reversed']),
     awaiting_payment:new Set(['awaiting_payment','pending','on_hold']),
     on_hold:new Set(['on_hold','pending'])};
   if(!transitions[item.status]?.has(status))return item;
