@@ -41,6 +41,19 @@ CREATE INDEX IF NOT EXISTS payment_intents_customer_created_idx
 CREATE INDEX IF NOT EXISTS payment_intents_business_status_idx
   ON payment_intents (business_id, status, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS provider_webhook_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider TEXT NOT NULL,
+  event_key CHAR(64) NOT NULL,
+  event_type VARCHAR(100) NOT NULL,
+  payload_hash CHAR(64) NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (provider, event_key)
+);
+
+CREATE INDEX IF NOT EXISTS provider_webhook_events_received_idx
+  ON provider_webhook_events (received_at DESC);
+
 CREATE TABLE IF NOT EXISTS payment_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   payment_intent_id UUID NOT NULL REFERENCES payment_intents(id) ON DELETE RESTRICT,
