@@ -4,6 +4,7 @@ import { handleMarketplaceApi, handleNotificationApi } from './marketplace_api.j
 import { acceptInvitation } from './business_resources.js';
 import { initializeProviderProfile } from './provider_resources.js';
 import { handleAdminProviderApi, handleProviderApi } from './provider_api.js';
+import { handlePaymentApi } from './payments_api.js';
 import {
   authenticateAccessToken,
   getAccountProfile,
@@ -461,9 +462,36 @@ export async function requestHandler(req, res) {
     }
   }
 
+  if (/^\/api\/v1\/webhooks\/payments\/(paystack|flutterwave)$/.test(url.pathname)) {
+    try {
+      const response = await handlePaymentApi(req, url);
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('payment_webhook_failed', error);
+      return json(res, 503, errorResponse('PAYMENT_WEBHOOK_UNAVAILABLE', 'Payment webhook processing is temporarily unavailable.'));
+    }
+  }
+
   if (url.pathname === '/api/v1/market/services') {
     const response = await handleMarketplaceApi(req, url);
     return json(res, response.status, response.body);
+  }
+
+  if (/^\/api\/v1\/customer\/payment-intents\/[^/]+$/.test(url.pathname) ||
+      /^\/api\/v1\/customer\/bookings\/[^/]+\/payment-intents$/.test(url.pathname)) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const response = await handlePaymentApi(req, url, authenticated.user);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('customer_payment_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected payment API error occurred.'));
+    }
   }
 
   if (url.pathname === '/api/v1/customer' || url.pathname.startsWith('/api/v1/customer/')) {
@@ -495,6 +523,24 @@ export async function requestHandler(req, res) {
     } catch (error) {
       logSafeError('notification_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (/^\/api\/v1\/business\/bookings\/[^/]+\/payments$/.test(url.pathname)) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const business = await resolveBusinessContext(req, authenticated.user);
+      if (business.error) return json(res, business.status, business.error);
+      const response = await handlePaymentApi(req, url, authenticated.user, business);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('business_payment_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected payment API error occurred.'));
     }
   }
 
