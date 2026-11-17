@@ -173,13 +173,23 @@ export async function listCustomerBookingPayments(userId,bookingId){
 
 async function markWebhookEvent(providerCode,eventId,eventType,payloadHash){
   const result=await queryDatabase(
-    "INSERT INTO payment_webhook_events (id,provider_code,provider_event_id,event_type,payload_sha256,signature_verified,processing_status) VALUES ($1,$2,$3,$4,$5,true,'received') ON CONFLICT (provider_code,provider_event_id) DO NOTHING RETURNING id",
+    "INSERT INTO payment_webhook_events (id,provider_code,provider_event_id,event_type,payload_sha256,signature_verified,processing_status) VALUES ($1,$2,$3,$4,$5,true,'received') ON CONFLICT (provider_code,provider_event_id) DO UPDATE SET processing_status='received',processing_error=NULL,payload_sha256=EXCLUDED.payload_sha256,received_at=now() WHERE payment_webhook_events.processing_status IN ('received','processing','failed') RETURNING id",
     [randomUUID(),providerCode,eventId,eventType,payloadHash]
   );
   if(result)return result.rowCount>0;
-  const key=providerCode+':'+eventId;
-  if(intents.has('__webhook__:'+key))return false;
-  intents.set('__webhook__:'+key,{id:key});
+  const key='__webhook__:'+providerCode+':'+eventId;
+  const previous=intents.get(key);
+  if(previous){
+    if(['received','processing','failed'].includes(previous.status)){
+      previous.status='received';
+      previous.error=null;
+      previous.payloadHash=payloadHash;
+      intents.set(key,previous);
+      return true;
+    }
+    return false;
+  }
+  intents.set(key,{id:key,status:'received',payloadHash});
   return true;
 }
 
@@ -188,10 +198,14 @@ async function finishWebhook(providerCode,eventId,status,error=null){
     'UPDATE payment_webhook_events SET processing_status=$3,processing_error=$4,processed_at=now() WHERE provider_code=$1 AND provider_event_id=$2',
     [providerCode,eventId,status,error]
   );
+  const key='__webhook__:'+providerCode+':'+eventId;
+  const previous=intents.get(key);
+  if(previous)intents.set(key,{...previous,status,error});
 }
 
 async function applyVerifiedPayment(providerCode,event,intent,verified){
-  const valid=verified.success&&verified.reference===intent.providerReference&&
+  const valid=verified.success&&typeof verified.transactionReference==='string'&&verified.transactionReference.length>0&&
+    verified.reference===intent.providerReference&&
     verified.amountMinor===Number(intent.amountMinor)&&
     verified.currencyCode===intent.currencyCode;
   if(!valid){
@@ -220,8 +234,8 @@ async function applyVerifiedPayment(providerCode,event,intent,verified){
         Number(intent.amountMinor),intent.currencyCode,event.eventId]
     );
     await client.query(
-      "INSERT INTO notifications (user_id,notification_type,title,body,resource_type,resource_id) VALUES ($1,'payment_success','Payment received','Your payment for booking '+$2+' has been confirmed.','booking',$3)",
-      [row.customer_user_id,row.booking_id,row.booking_id]
+      "INSERT INTO notifications (user_id,notification_type,title,body,resource_type,resource_id) VALUES ($1,'payment_success','Payment received','Your payment for your booking has been confirmed.','booking',$2)",
+      [row.customer_user_id,row.booking_id]
     );
     await client.query(
       "INSERT INTO notifications (user_id,notification_type,title,body,resource_type,resource_id) SELECT bm.user_id,'booking_payment','Customer payment received','A customer payment has been verified for a booking.','booking',$1 FROM business_memberships bm WHERE bm.business_id=$2 AND bm.status='active'",
@@ -237,6 +251,8 @@ async function applyVerifiedPayment(providerCode,event,intent,verified){
       item.providerTransactionRef=verified.transactionReference;
       item.verifiedAt=new Date().toISOString();
       intents.set(item.id,item);
+      const booking=await getCustomerBooking(item.customerUserId,item.bookingId);
+      if(booking)booking.paymentStatus='paid';
     }
     return {accepted:true,paid:true};
   }
@@ -298,7 +314,7 @@ export async function handlePaymentWebhook(providerCode,rawBody,headers){
     };
   }catch(error){
     await finishWebhook(code,event.eventId,'failed',String(error.message||'Payment verification failed.').slice(0,500));
-    return {status:200,body:{data:{received:true,verificationPending:true}}};
+    return {status:503,body:{error:{code:'PAYMENT_VERIFICATION_PENDING',message:'Payment verification is temporarily unavailable. The provider should retry this webhook.'}}};
   }
 }
 
