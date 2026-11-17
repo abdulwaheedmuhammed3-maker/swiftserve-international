@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { createHmac } from 'node:crypto';
 
 // Tests always use isolated in-memory repositories, regardless of local .env settings.
 process.env.NODE_ENV = 'test';
@@ -1377,6 +1378,109 @@ test('provider onboarding, verification, invitation, assignment and job completi
     });
     assert.equal(badWebhook.status,401);
     assert.equal(badWebhook.body.error.code,'INVALID_WEBHOOK_SIGNATURE');
+
+    process.env.PAYMENT_PROVIDER='paystack';
+    process.env.PAYMENT_RETURN_URL='https://swiftserve.example/checkout-return';
+    process.env.PAYSTACK_SECRET_KEY='sk_test_swiftserve_placeholder';
+    const originalFetch=globalThis.fetch;
+    let initializedReference=null;
+    let initializeCalls=0;
+    globalThis.fetch=async(input,options={})=>{
+      const target=String(input);
+      if(target.startsWith(base+'/'))return originalFetch(input,options);
+      if(target==='https://api.paystack.co/transaction/initialize'){
+        initializeCalls+=1;
+        const payload=JSON.parse(options.body);
+        initializedReference=payload.reference;
+        return new Response(JSON.stringify({
+          status:true,
+          data:{
+            authorization_url:'https://checkout.example/pay/'+payload.reference,
+            access_code:'test-access-code',
+            reference:payload.reference
+          }
+        }),{status:200,headers:{'Content-Type':'application/json'}});
+      }
+      if(target.startsWith('https://api.paystack.co/transaction/verify/')){
+        return new Response(JSON.stringify({
+          status:true,
+          data:{
+            id:987654321,
+            reference:initializedReference,
+            status:'success',
+            amount:225000,
+            currency:'NGN'
+          }
+        }),{status:200,headers:{'Content-Type':'application/json'}});
+      }
+      throw new Error('Unexpected payment gateway request in test: '+target);
+    };
+
+    try{
+      const checkout=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/payment-intents',{
+        method:'POST',
+        headers:{...customer.headers,'Idempotency-Key':'booking-payment-test-0002'},
+        body:JSON.stringify({})
+      });
+      assert.equal(checkout.status,201);
+      assert.equal(checkout.body.data.providerCode,'paystack');
+      assert.equal(checkout.body.data.amountMinor,225000);
+      assert.equal(checkout.body.data.currencyCode,'NGN');
+      assert.match(checkout.body.data.checkoutUrl,/^https:\/\/checkout\.example\//);
+      assert.equal(checkout.body.data.status,'pending');
+      assert.equal(initializeCalls,1);
+
+      const repeatedCheckout=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/payment-intents',{
+        method:'POST',
+        headers:{...customer.headers,'Idempotency-Key':'booking-payment-test-0002'},
+        body:JSON.stringify({})
+      });
+      assert.equal(repeatedCheckout.status,200);
+      assert.equal(repeatedCheckout.body.data.id,checkout.body.data.id);
+      assert.equal(initializeCalls,1);
+
+      const businessPaymentList=await request(base,'/api/v1/business/bookings/'+booking.body.data.id+'/payments',{
+        headers:owner.headers
+      });
+      assert.equal(businessPaymentList.status,200);
+      assert.equal(businessPaymentList.body.data.length,1);
+
+      const intentDetail=await request(base,'/api/v1/customer/payment-intents/'+checkout.body.data.id,{
+        headers:customer.headers
+      });
+      assert.equal(intentDetail.status,200);
+      assert.equal(intentDetail.body.data.status,'pending');
+
+      const webhookRaw=JSON.stringify({
+        event:'charge.success',
+        data:{id:987654321,reference:checkout.body.data.providerReference,status:'success'}
+      });
+      const signature=createHmac('sha512',process.env.PAYSTACK_SECRET_KEY)
+        .update(webhookRaw).digest('hex');
+      const paidWebhook=await request(base,'/api/v1/webhooks/payments/paystack',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-paystack-signature':signature},
+        body:webhookRaw
+      });
+      assert.equal(paidWebhook.status,200);
+      assert.equal(paidWebhook.body.data.paid,true);
+
+      const paidBooking=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id,{
+        headers:customer.headers
+      });
+      assert.equal(paidBooking.status,200);
+      assert.equal(paidBooking.body.data.paymentStatus,'paid');
+
+      const duplicateWebhook=await request(base,'/api/v1/webhooks/payments/paystack',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-paystack-signature':signature},
+        body:webhookRaw
+      });
+      assert.equal(duplicateWebhook.status,200);
+      assert.equal(duplicateWebhook.body.data.duplicate,true);
+    }finally{
+      globalThis.fetch=originalFetch;
+    }
 
     for(const key of paymentEnvironmentKeys){
       if(previousPaymentEnvironment[key]===undefined)delete process.env[key];
