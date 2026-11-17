@@ -35,6 +35,9 @@ function publicIntent(item){
 }
 
 async function expectedBookingAmount(userId,booking){
+  if(['paid','partially_refunded','refunded'].includes(booking.paymentStatus)){
+    return {error:'This booking already has a completed payment. Contact support if a refund or adjustment is required.'};
+  }
   if(booking.status!=='confirmed'&&booking.status!=='assigned'){
     return {error:'Payment can only be initiated for a confirmed or assigned booking.'};
   }
