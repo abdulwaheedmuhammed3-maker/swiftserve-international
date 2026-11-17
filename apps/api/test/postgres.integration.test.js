@@ -498,6 +498,21 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     });
     assert.equal(verified.status, 200);
     assert.equal(verified.body.data.verificationStatus, 'verified');
+
+    const payoutAccount=await call('/api/v1/provider/payout-account',{
+      method:'POST',
+      headers:providerHeaders,
+      body:JSON.stringify({
+        accountName:'Integration Provider',
+        accountNumber:'0123456789',
+        bankCode:'058',
+        currencyCode:'NGN'
+      })
+    });
+    assert.equal(payoutAccount.status,201);
+    assert.equal(payoutAccount.body.data.lastFour,'6789');
+    assert.equal(Object.prototype.hasOwnProperty.call(payoutAccount.body.data,'accountNumber'),false);
+
     if (previousAdminKey === undefined) delete process.env.SWIFTSERVE_ADMIN_API_KEY;
     else process.env.SWIFTSERVE_ADMIN_API_KEY = previousAdminKey;
 
