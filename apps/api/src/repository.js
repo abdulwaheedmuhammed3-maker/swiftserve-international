@@ -1,13 +1,34 @@
+import './config.js';
 import pg from 'pg';
 
 const { Pool } = pg;
-const pool = process.env.DATABASE_URL
+const databaseUrl = process.env.DATABASE_URL?.trim();
+
+const pool = databaseUrl && process.env.NODE_ENV !== 'test'
   ? new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: databaseUrl,
       connectionTimeoutMillis: 8000,
-      max: 5
+      idleTimeoutMillis: 30000,
+      query_timeout: 15000,
+      statement_timeout: 15000,
+      max: 5,
+      application_name: 'swiftserve-api'
     })
   : null;
+
+if (!pool && process.env.NODE_ENV === 'production') {
+  throw new Error('DATABASE_URL is required in production. Refusing to start with volatile in-memory storage.');
+}
+
+if (pool) {
+  pool.on('error', error => {
+    console.error(JSON.stringify({
+      event: 'database_pool_error',
+      code: typeof error?.code === 'string' ? error.code : 'NO_CODE',
+      name: typeof error?.name === 'string' ? error.name : 'UNKNOWN_ERROR'
+    }));
+  });
+}
 
 const memoryStore = new Map();
 
@@ -36,12 +57,16 @@ export async function checkDatabase() {
 
 export async function listJobs(status) {
   if (!pool) {
-    const items = [...memoryStore.values()].filter(job => !status || job.status === status);
-    return items;
+    return [...memoryStore.values()].filter(job => !status || job.status === status);
   }
+
   const result = status
-    ? await pool.query('SELECT * FROM service_requests WHERE status = $1 ORDER BY created_at DESC', [status])
+    ? await pool.query(
+        'SELECT * FROM service_requests WHERE status = $1 ORDER BY created_at DESC',
+        [status]
+      )
     : await pool.query('SELECT * FROM service_requests ORDER BY created_at DESC');
+
   return result.rows.map(fromRow);
 }
 
@@ -56,6 +81,7 @@ export async function createJob(job) {
     memoryStore.set(job.id, job);
     return job;
   }
+
   const result = await pool.query(
     'INSERT INTO service_requests (service, description, area, status) VALUES ($1, $2, $3, $4) RETURNING *',
     [job.service, job.description, job.area, job.status]
@@ -63,26 +89,31 @@ export async function createJob(job) {
   return fromRow(result.rows[0]);
 }
 
-export async function updateJob(id, patch) {
+export async function updateJob(id, patch, expectedStatus = null) {
   if (!pool) {
     const current = memoryStore.get(id);
-    if (!current) return null;
+    if (!current || (expectedStatus && current.status !== expectedStatus)) return null;
+
     const updated = { ...current, ...patch, updatedAt: new Date().toISOString() };
     memoryStore.set(id, updated);
     return updated;
   }
+
   const current = await getJob(id);
   if (!current) return null;
+
   const updated = {
     service: patch.service ?? current.service,
     description: patch.description ?? current.description,
     area: patch.area ?? current.area,
     status: patch.status ?? current.status
   };
+
   const result = await pool.query(
-    'UPDATE service_requests SET service=$1, description=$2, area=$3, status=$4, updated_at=now() WHERE id=$5 RETURNING *',
-    [updated.service, updated.description, updated.area, updated.status, id]
+    'UPDATE service_requests SET service=$1, description=$2, area=$3, status=$4, updated_at=now() WHERE id=$5 AND ($6::text IS NULL OR status=$6) RETURNING *',
+    [updated.service, updated.description, updated.area, updated.status, id, expectedStatus]
   );
+
   return fromRow(result.rows[0]);
 }
 

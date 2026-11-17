@@ -1,72 +1,95 @@
-# Initial Architecture
+# SwiftServe Architecture
 
-## Product shape
+## Product direction
 
-SwiftServe is intended to serve two sides of a local-services market:
+SwiftServe is an international household-services platform with three connected experiences:
 
-- **Business workspace:** receive and manage requests, update job status, maintain service offerings, and later manage schedules and team members.
-- **Customer experience:** discover services, submit a request, understand status, and later communicate with the assigned provider and pay through supported local methods.
+- **Customer experience:** discover services, request quotes or bookings, track fulfilment, communicate with providers and pay through supported local methods.
+- **Business workspace:** manage a business profile, service catalogue, service areas, schedules, incoming bookings, team members and operational performance.
+- **Provider experience:** manage availability, assigned work, verification status, job progress, earnings and customer feedback.
 
-The first validation milestone is the business workflow, not a multi-country marketplace launch.
+A platform administration workspace will support onboarding, disputes, market configuration, compliance and operational oversight.
+
+## Architecture strategy
+
+Start with a modular monolith: one deployable API with clearly separated domain modules and a managed PostgreSQL database. This is easier to operate and more economical for an early product than introducing distributed services. Extract services only when actual workload, team boundaries or reliability needs justify it.
+
+The Android application is currently a limited business request-management MVP. The backend is a Node.js HTTP REST API. PostgreSQL is used when DATABASE_URL is configured; development without a database uses temporary in-memory storage. Production refuses to start without DATABASE_URL.
 
 ## Current implementation
 
-The API is a small Node.js HTTP service with a versioned JSON REST interface. The current `jobs` resource supports create, list, read, update, and delete operations. Input validation and a basic automated test suite are included.
+- Versioned REST routes for basic service-request create, list, retrieve, update and delete operations.
+- Server-side input validation and a 1 MB request-body limit.
+- UUID validation for request identifiers.
+- A limited job-status lifecycle with concurrent-update protection.
+- PostgreSQL repository adapter using parameterized queries.
+- Process liveness at /health and dependency readiness at /readyz.
+- Android business MVP with local storage or API connection.
+- API tests and GitHub Actions workflows for API CI and debug APK builds.
 
-Current storage is an in-memory Map. This is suitable only for a development exercise and must be replaced before pilot use with real customer information.
+Current limitations:
 
-## Proposed target modules
+- No authentication, sessions or role management.
+- No business ownership or business-level access isolation.
+- No customer application or provider application.
+- No business profiles, service catalogue or booking scheduler.
+- No provider verification, payments, notifications, reviews or disputes.
+- No database integration tests, formal migration runner, backup automation or production deployment validation.
 
-1. **Identity and access:** users, sessions, roles, business membership, and authorization.
-2. **Business profiles:** business details, service areas, opening hours, and service catalogue.
-3. **Service requests/bookings:** request lifecycle, scheduling, assignment, cancellation, and audit history.
-4. **Provider operations:** provider profiles, verification state, availability, and service coverage.
-5. **Notifications:** email/SMS/push integrations behind provider interfaces.
-6. **Payments:** country-specific payment adapter, transaction state, refunds, and reconciliation.
-7. **Platform administration:** support tools, abuse reports, and operational audit logs.
+## Proposed domain modules
 
-Implement modules only when validated by customer needs and operational requirements.
+1. **Identity and access:** users, authentication, sessions, roles, business memberships and permissions.
+2. **Market configuration:** countries, currencies, time zones, locales, supported payment methods and service availability.
+3. **Business management:** business profiles, branches, team members, operating hours, service areas and service catalogues.
+4. **Customer accounts:** profiles, contact preferences, saved locations and consent records.
+5. **Provider operations:** provider profiles, onboarding, verification workflow, availability and service coverage.
+6. **Bookings:** quote requests, booking confirmation, scheduling, assignment, cancellation, status history and completion evidence.
+7. **Communications:** email, SMS and push notifications behind provider adapters.
+8. **Payments and finance:** payment intents, provider payouts, refunds, fees, settlement and reconciliation through country-specific adapters.
+9. **Trust and safety:** reviews, reports, disputes, moderation, audit events and support workflows.
+10. **Administration and analytics:** market operations, platform configuration, service quality, revenue and operational reporting.
 
 ## Data model direction
 
-A later persistent schema will likely include:
+The schema should evolve through reviewed, ordered migrations. Expected entities include:
 
-- `users`
-- `businesses`
-- `business_memberships`
-- `service_categories`
-- `business_services`
-- `service_areas`
-- `service_requests`
-- `bookings`
-- `provider_profiles`
-- `provider_verification_checks`
-- `payments` and `refunds`
-- `audit_events`
+- countries, currencies and supported markets
+- users, sessions, roles and permissions
+- businesses, branches and business_memberships
+- customer_profiles and provider_profiles
+- service_categories, business_services and service_areas
+- availability_windows and operating_hours
+- service_requests, quotes, bookings and booking_status_events
+- provider_assignments and verification_checks
+- payment_intents, payments, payouts and refunds
+- reviews, disputes, notifications and audit_events
 
-The final schema should be driven by the confirmed booking lifecycle. Avoid collecting identity documents, exact addresses, or payment details until there is a clear purpose and a secure handling process.
+Every business-owned record must have an explicit ownership path. Authorization must be enforced server-side in every read and write query; hiding records in the client is not security.
 
 ## API conventions
 
-- Prefix routes with `/api/v1`.
-- Use JSON request and response bodies.
-- Validate all input on the server.
-- Use consistent error envelopes.
-- Add pagination before collection endpoints grow.
-- Enforce authorization at the resource level once accounts are introduced.
-- Document endpoints in OpenAPI and test success, validation, authorization, and failure paths.
+- Keep versioned routes under /api/v1.
+- Validate request bodies and query parameters at the API boundary.
+- Use consistent JSON error envelopes and appropriate HTTP status codes.
+- Use parameterized database queries.
+- Add pagination, filtering and sorting to collection endpoints.
+- Enforce authentication and resource-level authorization for protected routes.
+- Use idempotency for payment and booking operations where retries can create duplicate effects.
+- Document endpoints with an OpenAPI specification.
+- Test success, validation, authorization, concurrency and failure paths.
 
-## Country readiness
+## Security and privacy baseline
 
-Treat currency, time zone, language, phone formatting, tax, consumer rights, data protection, payment methods, and provider screening as configurable market concerns. Do not enable a country until the legal and operational checklist is reviewed for that market.
+- Authentication with secure session or token lifecycle and revocation.
+- Business-scoped authorization and least privilege.
+- Persistent database, reviewed migrations, backups and tested restores.
+- HTTPS at the deployment edge and TLS to managed services where supported.
+- Rate limits, request-size limits, safe error handling and structured logs.
+- Secret management and rotation; no credentials in source control or mobile builds.
+- Audit trails for sensitive administrative and financial actions.
+- Minimize personal data and define consent, retention, export and deletion processes.
+- Keep payment card data with a compliant payment provider; do not store card numbers or security codes.
 
-## Security baseline before a pilot
+## International readiness
 
-- Persistent database with backups and migrations.
-- Authentication, authorization, and session/token lifecycle.
-- HTTPS at the deployed edge.
-- Request-size limits, rate limits, and safe error handling.
-- Secret management and rotation process.
-- Data minimization, retention/deletion process, and privacy notice.
-- Audit logging for sensitive business actions.
-- Dependency updates and automated tests in CI.
+Treat currency, time zone, language, phone formatting, service taxonomy, taxes, consumer protection, data protection, accessibility, payment methods, provider screening and support hours as market configuration. Do not enable a country until its legal, tax, payment and operational requirements are reviewed. Launch one market at a time.

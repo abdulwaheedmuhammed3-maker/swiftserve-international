@@ -84,6 +84,19 @@ public final class MainActivity extends Activity {
         page.addView(connect, params(-1, dp(48)));
         connect.setOnClickListener(v -> {
             String value = apiUrl.getText().toString().trim().replaceAll("/+$", "");
+            if (!value.isEmpty()) {
+                try {
+                    URL parsed = new URL(value);
+                    if (!"https".equalsIgnoreCase(parsed.getProtocol()) ||
+                            parsed.getHost().isEmpty() || parsed.getUserInfo() != null) {
+                        toast("Enter a valid HTTPS API address.");
+                        return;
+                    }
+                } catch (Exception error) {
+                    toast("Enter a valid HTTPS API address.");
+                    return;
+                }
+            }
             getPreferences(0).edit().putString(API_KEY, value).apply();
             updateConnection();
             loadJobs();
@@ -123,7 +136,7 @@ public final class MainActivity extends Activity {
         String base = getPreferences(0).getString(API_KEY, "");
         connectionStatus.setText(base.isEmpty()
                 ? "On-device mode · requests stay on this phone"
-                : "Connected mode · " + base);
+                : "API configured · connection is checked when requests load");
     }
 
     private void createJob() {
@@ -245,9 +258,12 @@ public final class MainActivity extends Activity {
             LinearLayout.LayoutParams actionsParams = params(-1, dp(44));
             actionsParams.topMargin = dp(10);
             card.addView(actions, actionsParams);
-            Button update = button(nextLabel(job.optString("status", "pending")));
-            actions.addView(update, new LinearLayout.LayoutParams(0, -1, 1));
-            update.setOnClickListener(v -> changeStatus(job));
+            String status = job.optString("status", "pending");
+            if (status.equals("pending") || status.equals("accepted")) {
+                Button update = button(nextLabel(status));
+                actions.addView(update, new LinearLayout.LayoutParams(0, -1, 1));
+                update.setOnClickListener(v -> changeStatus(job));
+            }
             Button delete = button("Delete");
             LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(100), -1);
             deleteParams.leftMargin = dp(8);
@@ -315,13 +331,9 @@ public final class MainActivity extends Activity {
         int status = conn.getResponseCode();
         if (status < 200 || status >= 300) {
             InputStream err = conn.getErrorStream();
-            String message = "API request failed (" + status + ").";
-            if (err != null) try (BufferedReader reader = new BufferedReader(new InputStreamReader(err, StandardCharsets.UTF_8))) {
-                String line = reader.readLine();
-                if (line != null && !line.isEmpty()) message = line;
-            }
+            if (err != null) err.close();
             conn.disconnect();
-            throw new IllegalStateException(message);
+            throw new IllegalStateException("API request failed (" + status + ").");
         }
         InputStream stream = status == 204 ? null : conn.getInputStream();
         StringBuilder response = new StringBuilder();
