@@ -35,7 +35,11 @@ The Android application is currently a limited business workspace. The backend i
 - Customer profiles and private saved service locations.
 - Tenant-scoped booking requests, immutable address/price snapshots, quote history and status events.
 - In-app notifications for new bookings, quotes, quote responses, status changes and cancellations.
-- Checksum-verified migrations 001–005 and PostgreSQL 16 CI integration tests.
+- Checksum-verified migrations 001–006 and PostgreSQL 16 CI integration tests.
+- Paystack payment initialization, server-side transaction verification and signed webhook handling.
+- Full/partial refund records and gateway-state updates.
+- Provider payout-recipient registration, completed-job payout ledger, platform-fee calculation and administrator-triggered transfers.
+- Customer reviews for completed bookings and customer/business disputes with conversation and admin resolution records.
 - Provider account registration and provider profiles with service skills, service areas and weekly availability.
 - Manual provider verification request/review workflow protected by a server-side admin API key.
 - Business-provider invitation and membership workflow.
@@ -53,6 +57,9 @@ The Android application is currently a limited business workspace. The backend i
 - The Android app selects the first returned business; multi-business switching, team invitations and role-based screens are not implemented.
 - The Android app still provides the business service-request MVP; customer marketplace and booking screens are not implemented.
 - Provider onboarding and assignment exist in the API, but there is no dedicated provider or customer mobile app.
+- Payments use a Paystack adapter but no live Paystack merchant account or production webhook has been configured or verified; CI uses a local mock gateway.
+- Provider payout recipient registration currently supports Nigerian NGN NUBAN accounts only. Payout transfers are administrator-triggered, not scheduled automatically.
+- Dispute resolution records an administrative outcome but does not automatically execute a refund; refunds are a separate business action.
 - Provider and business invitation tokens are returned once for private out-of-band sharing; no email delivery provider is configured.
 - Assignment checks provider schedule overlaps, but there is no full business slot-capacity/booking conflict engine or rescheduling flow.
 - No payment collection, provider payouts, reviews, disputes or refunds yet.
@@ -84,6 +91,20 @@ The business identifier supplied by the client is only a selection hint. It is n
 8. **Payments and finance:** payment intents, provider payouts, refunds, fees, settlement and reconciliation through country-specific adapters.
 9. **Trust and safety:** reviews, reports, disputes, moderation, audit events and support workflows.
 10. **Administration and analytics:** market operations, platform configuration, service quality, revenue and operational reporting.
+
+## Finance and trust model
+
+Payment intents are created only for confirmed bookings and use the price stored in the confirmed booking snapshot. Accepting a quote replaces the catalogue estimate with the accepted quote amount. The API initializes Paystack checkout with an idempotency key and marks a payment successful only after server-side transaction verification confirms the reference, amount, currency and success status.
+
+Paystack webhooks are verified against the raw request body using HMAC SHA-512. The current handler supports a timestamped signature with a five-minute tolerance and the legacy signature header. Provider webhook event keys are retained to ignore duplicate deliveries. Payment, refund and transfer status updates are guarded against regressing terminal financial states.
+
+Refund records are tied to a booking and successful payment. Full and partial refund amounts are expressed in the same smallest-currency unit as the payment. Processed refunds reduce the gross available to a provider payout.
+
+When a provider completes an assigned booking, SwiftServe creates or refreshes a payout ledger record if a successful/partially-refunded payment exists. The configured platform fee is measured in basis points, defaults to zero and is capped at 50%. An administrator explicitly initiates the Paystack transfer; a signed transfer webhook records the final transfer status. The initial payout-recipient flow supports Nigerian NGN NUBAN accounts. SwiftServe stores the Paystack recipient code and masked account details, not the full bank account number.
+
+Customers can review a completed booking once. Customers and businesses can open disputes and exchange messages within the booking's ownership boundary. Administrators can record review/resolution outcomes. Dispute closure does not automatically create a refund or transfer funds.
+
+No live gateway credentials are stored in the repository. CI uses a local mock Paystack-compatible HTTP server to exercise initialization, verification, refund, transfer, webhook signature and payout workflows. The mock verifies integration behaviour; it is not evidence of live Paystack settlement or production deployment.
 
 ## Provider operations model
 
