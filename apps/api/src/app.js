@@ -158,8 +158,8 @@ function validateRegistration(body) {
   }
 
   const accountType = body.accountType ?? 'customer';
-  if (!['customer', 'business'].includes(accountType)) {
-    details.push('accountType must be customer or business.');
+  if (!['customer', 'business', 'provider'].includes(accountType)) {
+    details.push('accountType must be customer, business or provider.');
   }
 
   if (accountType === 'business' &&
@@ -168,8 +168,12 @@ function validateRegistration(body) {
        body.businessName.trim().length > 120)) {
     details.push('businessName must be between 2 and 120 characters for a business account.');
   }
-  if (accountType === 'customer' && body.businessName !== undefined) {
+  if (accountType !== 'business' && body.businessName !== undefined) {
     details.push('businessName can only be supplied for a business account.');
+  }
+  if (accountType === 'provider' &&
+      (typeof body.countryCode !== 'string' || !/^[A-Za-z]{2}$/.test(body.countryCode))) {
+    details.push('countryCode is required for a provider account.');
   }
   if (body.countryCode !== undefined &&
       (typeof body.countryCode !== 'string' || !/^[A-Za-z]{2}$/.test(body.countryCode))) {
