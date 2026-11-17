@@ -107,7 +107,10 @@ export async function checkDatabase() {
     "to_regclass('public.booking_reviews') AS booking_reviews, " +
     "to_regclass('public.disputes') AS disputes, " +
     "to_regclass('public.dispute_messages') AS dispute_messages, " +
-    "to_regclass('public.dispute_events') AS dispute_events"
+    "to_regclass('public.dispute_events') AS dispute_events, " +
+    "to_regclass('public.admin_audit_logs') AS admin_audit_logs, " +
+    "to_regclass('public.finance_reconciliation_runs') AS finance_reconciliation_runs, " +
+    "to_regclass('public.finance_reconciliation_items') AS finance_reconciliation_items"
   );
 
   const row = schema.rows[0] || {};
@@ -118,7 +121,8 @@ export async function checkDatabase() {
     'business_provider_memberships', 'provider_invitations', 'booking_assignments', 'provider_status_events',
     'payment_intents', 'payment_events', 'provider_webhook_events', 'refunds',
     'provider_payout_accounts', 'provider_payouts', 'provider_payout_events',
-    'booking_reviews', 'disputes', 'dispute_messages', 'dispute_events'];
+    'booking_reviews', 'disputes', 'dispute_messages', 'dispute_events',
+    'admin_audit_logs', 'finance_reconciliation_runs', 'finance_reconciliation_items'];
   const missingTables = requiredTables.filter(name => !row[name]);
 
   if (missingTables.length) {
@@ -135,7 +139,8 @@ export async function checkDatabase() {
     '003_business_operations.sql',
     '004_customer_bookings.sql',
     '005_provider_operations.sql',
-    '006_finance_reviews_disputes.sql'
+    '006_finance_reviews_disputes.sql',
+    '007_admin_audit_reconciliation.sql'
   ];
   const missingMigrations = requiredMigrations.filter(version => !applied.has(version));
 
