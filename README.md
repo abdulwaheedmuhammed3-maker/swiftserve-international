@@ -4,7 +4,7 @@
 
 SwiftServe is an international household-services platform, starting with a business-first workflow. It is designed to connect customers with service businesses and providers while giving businesses a workspace to manage requests and bookings.
 
-> **Development status:** the API now includes customer, business and provider accounts; business operations; service discovery; saved customer addresses; booking and quote workflows; provider onboarding, weekly availability, verification review, business invitations and booking assignment. This remains an MVP under active development, not a production-ready international marketplace. Provider document upload, automated email/SMS/push delivery, payments, refunds, reviews, disputes, Android customer/provider screens and real Supabase/Render deployment verification are still outstanding.
+> **Development status:** the API now includes customer, business and provider accounts; business operations; service discovery; saved addresses; booking and quote workflows; provider onboarding/assignment; optional hosted-checkout adapters for Paystack and Flutterwave; a payment transaction ledger; reviews and dispute handling. This is still an MVP, not a production-ready international marketplace. Payment collection is disabled until gateway secrets and the return URL are configured. Automated refunds, provider/business payouts, provider document storage, email/SMS/push delivery, customer/provider Android screens and real Supabase/Render deployment verification remain outstanding.
 
 ## Repository structure
 
@@ -54,6 +54,7 @@ The current migrations are:
 3. apps/api/db/migrations/003_business_operations.sql
 4. apps/api/db/migrations/004_customer_bookings.sql
 5. apps/api/db/migrations/005_provider_operations.sql
+6. apps/api/db/migrations/006_payments_trust.sql
 
 For Render, the API start command can run migrations before starting the server:
 
@@ -63,7 +64,7 @@ The server checks that the required migration records and tables exist before it
 
 Never commit .env files or real credentials. In production, DATABASE_URL is required and the API refuses to start without it. The server checks the configured database and required core tables before listening. A missing migration makes database readiness fail. Without DATABASE_URL in development, the API uses temporary in-memory storage; those records disappear when the process stops.
 
-Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Migration 003 adds business profiles, branches, service catalogues, opening hours, service coverage and team invitations. Migration 004 adds customer profiles and saved locations, service bookings, quote history, booking status events and in-app notifications. Migration 005 adds provider profiles, skills, service areas, weekly availability, business-provider memberships, provider invitations and booking assignments. Existing requests from before migration 002 have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
+Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Migration 003 adds business profiles, branches, service catalogues, opening hours, service coverage and team invitations. Migration 004 adds customer profiles and saved locations, service bookings, quote history, booking status events and in-app notifications. Migration 005 adds provider profiles, skills, service areas, weekly availability, business-provider memberships, provider invitations and booking assignments. Migration 006 adds payment intents, provider transaction records, allocations, refund/payout ledgers, webhook receipts, reviews, business responses, disputes and dispute messages. Existing requests from before migration 002 have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
 
 ### Authentication endpoints
 
@@ -197,6 +198,54 @@ Provider invitation delivery is not automated. The API returns the invitation to
 
 The admin key must never be committed to GitHub or placed in Android/mobile code. Provider identity-document file uploads and storage are not implemented in this phase; approval is an operational review flag, not automated identity verification.
 
+### Payments and settlement
+
+Payment routes are available, but checkout remains disabled unless the selected gateway is explicitly configured on the API server. Do not place gateway secrets in the Android app, frontend, repository or CI artifacts.
+
+Required configuration:
+
+- PAYMENT_PROVIDER=paystack or PAYMENT_PROVIDER=flutterwave
+- PAYMENT_RETURN_URL — HTTPS URL for the hosted gateway return flow
+- PAYSTACK_SECRET_KEY for Paystack
+- FLUTTERWAVE_SECRET_KEY and FLUTTERWAVE_WEBHOOK_SECRET_HASH for Flutterwave
+- Optional PAYSTACK_SUPPORTED_CURRENCIES and FLUTTERWAVE_SUPPORTED_CURRENCIES allowlists to restrict currencies per deployment.
+
+The enabled currency set must be checked against the merchant account, gateway product and target market before launch. The code defaults are configuration defaults, not a promise that every account can collect every listed currency or operate in every country.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | /api/v1/customer/bookings/:id/payment-intents | Create a hosted checkout for a confirmed/assigned booking |
+| GET | /api/v1/customer/bookings/:id/payment-intents | List the customer's payment attempts for a booking |
+| GET | /api/v1/customer/payment-intents/:id | Read one customer-owned payment intent |
+| GET | /api/v1/business/bookings/:id/payments | View payment attempts for a business booking |
+| POST | /api/v1/webhooks/payments/paystack | Receive signed Paystack webhook events |
+| POST | /api/v1/webhooks/payments/flutterwave | Receive signed Flutterwave webhook events |
+
+Payment-intent creation requires an Idempotency-Key. Fixed-price services use the immutable booking price snapshot; quote-priced services require an accepted quote. The API marks a booking paid only after server-to-server verification confirms the provider reference, transaction reference, amount and currency. Webhook signatures are checked before a webhook is processed. Card details are entered on the gateway-hosted checkout page and are not stored by SwiftServe.
+
+Migration 006 also adds transaction, payment allocation, refund, payout and webhook-event ledgers. At this stage refund and payout tables are records only: SwiftServe does not yet submit or reconcile external refund/payout transfers, calculate final business/provider/platform splits, or expose provider settlement accounts. Do not treat a recorded ledger row as money having moved.
+
+### Reviews and service disputes
+
+A customer can review a completed booking once. A business can publish one response to a review. Customers can open one dispute per eligible booking; the business and customer can exchange participant messages, and an admin key can move a case through review/resolution.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET / POST | /api/v1/customer/bookings/:id/review | Read or submit a review for a completed booking |
+| GET | /api/v1/business/reviews | List published business reviews |
+| POST | /api/v1/business/reviews/:reviewId/response | Respond to a review |
+| POST | /api/v1/customer/bookings/:id/disputes | Open a dispute |
+| GET | /api/v1/customer/disputes | List the customer's disputes |
+| GET | /api/v1/customer/disputes/:id | Read a dispute and participant messages |
+| POST | /api/v1/customer/disputes/:id/messages | Add a participant message |
+| GET | /api/v1/business/disputes | List disputes for the selected business |
+| GET | /api/v1/business/disputes/:id | Read a business-owned dispute |
+| POST | /api/v1/business/disputes/:id/messages | Add a business participant message |
+| GET | /api/v1/admin/disputes | List disputes using the protected admin key |
+| GET / PATCH | /api/v1/admin/disputes/:id | Read or update dispute review/resolution state |
+
+Admin dispute routes use SWIFTSERVE_ADMIN_API_KEY as an initial gate. A complete administrator account/role model and actor-attributed admin audit trail are not implemented. The admin key must be stored as a server secret.
+
 ### Health checks
 
 - /health reports process liveness.
@@ -206,7 +255,7 @@ The simple authentication throttle is process-local. Before horizontal scaling o
 
 ## CI
 
-The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies all migrations, runs API HTTP/unit regression tests and runs PostgreSQL integration tests for identity, business isolation, customer locations, service bookings, quotes, notifications, provider verification and booking assignments. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
+The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies migrations 001–006, runs API HTTP/unit regression tests and runs PostgreSQL integration tests for identity, business isolation, customer bookings, provider assignments, payment-disabled/signature checks, reviews and disputes. The Android APK workflow builds and uploads a debug APK when Android source or build configuration changes.
 
 ## Development roadmap
 
@@ -214,7 +263,7 @@ The SwiftServe API CI workflow starts a temporary PostgreSQL 16 service, applies
 2. Complete identity and business isolation, including migration/integration tests, session lifecycle and operational hardening.
 3. Complete business operations, including staff invitation delivery, multiple-business switching and full operational reporting.
 4. Complete customer discovery, booking, quote handling and notifications, then connect the Android customer experience.
-5. Complete provider documents/storage, customer/provider Android experiences, payment collection, refunds, reviews and dispute workflows.
+5. Complete provider document storage, customer/provider Android experiences, automated refund/payout settlement, admin identity/audit, and production payment configuration.
 6. Prepare one launch market at a time with appropriate country, privacy, tax and payment configuration.
 
 ## Security and data use
