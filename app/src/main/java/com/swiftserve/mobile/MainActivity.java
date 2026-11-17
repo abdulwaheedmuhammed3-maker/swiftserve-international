@@ -451,7 +451,15 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> success.accept(value));
             } catch (Exception error) {
                 String message = error.getMessage() == null ? "Could not reach the API." : error.getMessage();
-                runOnUiThread(() -> toast(message));
+                runOnUiThread(() -> {
+                    if (message.contains("API request failed (401)")) {
+                        clearLocalSession();
+                        if (jobsList != null) jobsList.removeAllViews();
+                        toast("Your session has expired. Please sign in again.");
+                    } else {
+                        toast(message);
+                    }
+                });
             }
         });
     }
