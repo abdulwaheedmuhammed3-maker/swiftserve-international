@@ -621,7 +621,8 @@ export async function getCustomerDispute(userId,bookingId){
     [userId,bookingId]
   );
   if(result)return result.rows[0]?mapDispute(result.rows[0]):null;
-  return [...disputes.values()].find(item=>item.bookingId===bookingId)||null;
+  const item=[...disputes.values()].find(row=>row.bookingId===bookingId);
+  return item&&item.customerUserId===userId?item:null;
 }
 
 export async function getBusinessDispute(businessId,bookingId){
