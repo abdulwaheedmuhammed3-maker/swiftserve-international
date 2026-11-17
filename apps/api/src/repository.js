@@ -532,6 +532,26 @@ export async function updateBusinessMemberRole(businessId, userId, role) {
   return row ? { businessId: row.business_id, userId: row.user_id, role: row.role } : null;
 }
 
+export async function addBusinessMember(businessId, userId, role) {
+  if (!pool) {
+    const business = memoryBusinesses.get(businessId);
+    const user = memoryUsers.get(userId);
+    if (!business || !user || business.status !== 'active' || user.status !== 'active') return null;
+    const key = businessId + ':' + userId;
+    memoryMemberships.set(key, {
+      businessId, userId, role, status: 'active',
+      createdAt: new Date().toISOString()
+    });
+    return { businessId, userId, role };
+  }
+  const result = await pool.query(
+    "INSERT INTO business_memberships (business_id,user_id,role,status) VALUES ($1,$2,$3,'active') ON CONFLICT (business_id,user_id) DO UPDATE SET role=EXCLUDED.role,status='active' RETURNING business_id,user_id,role",
+    [businessId,userId,role]
+  );
+  const row = result.rows[0];
+  return row ? { businessId: row.business_id, userId: row.user_id, role: row.role } : null;
+}
+
 export async function removeBusinessMember(businessId, userId) {
   if (!pool) {
     const key = businessId + ':' + userId;
