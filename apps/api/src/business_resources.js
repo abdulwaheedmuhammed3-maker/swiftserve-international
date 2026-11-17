@@ -1,5 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { queryDatabase } from './repository.js';
+import { addBusinessMember, queryDatabase } from './repository.js';
 
 const services = new Map();
 const branches = new Map();
@@ -325,21 +325,26 @@ export async function revokeInvitation(businessId,id) {
 
 export async function acceptInvitation(token,userId,email) {
   const hash=createHash('sha256').update(token).digest('hex');
-  const clientResult=await queryDatabase('SELECT id FROM business_invitations WHERE token_hash=$1',[hash]);
-  if (clientResult) {
-    const result=await queryDatabase(
+  const selected=await queryDatabase(
+    "SELECT business_id,role FROM business_invitations WHERE token_hash=$1 AND email=$2 AND status='pending' AND expires_at>now() LIMIT 1",
+    [hash,email]
+  );
+  if (selected) {
+    const invitation=selected.rows[0];
+    if (!invitation) return null;
+    const membership=await addBusinessMember(invitation.business_id,userId,invitation.role);
+    if (!membership) return null;
+    const accepted=await queryDatabase(
       "UPDATE business_invitations SET status='accepted',accepted_by_user_id=$2,accepted_at=now() WHERE token_hash=$1 AND email=$3 AND status='pending' AND expires_at>now() RETURNING business_id,role",
       [hash,userId,email]
     );
-    if (!result.rows[0]) return null;
-    await queryDatabase(
-      "INSERT INTO business_memberships (business_id,user_id,role,status) VALUES ($1,$2,$3,'active') ON CONFLICT (business_id,user_id) DO UPDATE SET role=EXCLUDED.role,status='active'",
-      [result.rows[0].business_id,userId,result.rows[0].role]
-    );
-    return {businessId:result.rows[0].business_id,role:result.rows[0].role};
+    if (!accepted.rows[0]) return null;
+    return {businessId:accepted.rows[0].business_id,role:accepted.rows[0].role};
   }
   const item=[...invitations.values()].find(invite=>invite.tokenHash===hash);
   if (!item || item.email!==email || item.status!=='pending' || new Date(item.expiresAt)<=new Date()) return null;
+  const membership=await addBusinessMember(item.businessId,userId,item.role);
+  if (!membership) return null;
   invitations.set(item.id,{...item,status:'accepted',acceptedByUserId:userId});
   return {businessId:item.businessId,role:item.role};
 }
