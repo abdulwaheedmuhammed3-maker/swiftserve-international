@@ -35,7 +35,10 @@ The Android application is currently a limited business workspace. The backend i
 - Customer profiles and private saved service locations.
 - Tenant-scoped booking requests, immutable address/price snapshots, quote history and status events.
 - In-app notifications for new bookings, quotes, quote responses, status changes and cancellations.
-- Checksum-verified migrations 001–005 and PostgreSQL 16 CI integration tests.
+- Checksum-verified migrations 001–006 and PostgreSQL 16 CI integration tests.
+- Hosted checkout adapters for Paystack and Flutterwave with server-side credentials, payment idempotency, webhook signature checks and server-to-server transaction verification.
+- Payment intent, transaction, allocation, refund, payout and webhook-event ledger tables; no card data or customer wallet balances are stored.
+- Customer reviews, business review responses, customer/business dispute threads and protected admin dispute resolution.
 - Provider account registration and provider profiles with service skills, service areas and weekly availability.
 - Manual provider verification request/review workflow protected by a server-side admin API key.
 - Business-provider invitation and membership workflow.
@@ -55,7 +58,9 @@ The Android application is currently a limited business workspace. The backend i
 - Provider onboarding and assignment exist in the API, but there is no dedicated provider or customer mobile app.
 - Provider and business invitation tokens are returned once for private out-of-band sharing; no email delivery provider is configured.
 - Assignment checks provider schedule overlaps, but there is no full business slot-capacity/booking conflict engine or rescheduling flow.
-- No payment collection, provider payouts, reviews, disputes or refunds yet.
+- Payment collection is disabled until an operator configures a supported gateway, return URL, server secrets and currency allowlist. CI uses mocked gateway calls only; no real transaction has been processed.
+- Refund and payout tables currently record intended/externally processed activity; SwiftServe does not yet initiate or reconcile actual refund/payout transfers, create provider settlement accounts, or calculate final platform/business/provider splits.
+- The admin dispute endpoint uses a shared API key, not an authenticated administrator account; dispute resolutions are not yet attributable to a specific admin user.
 
 ## Identity and authorization model
 
@@ -84,6 +89,20 @@ The business identifier supplied by the client is only a selection hint. It is n
 8. **Payments and finance:** payment intents, provider payouts, refunds, fees, settlement and reconciliation through country-specific adapters.
 9. **Trust and safety:** reviews, reports, disputes, moderation, audit events and support workflows.
 10. **Administration and analytics:** market operations, platform configuration, service quality, revenue and operational reporting.
+
+## Payments, refunds and settlement model
+
+The booking payment flow is provider-agnostic and currently has Paystack and Flutterwave hosted-checkout adapters. The customer receives a gateway-hosted checkout URL; SwiftServe does not collect or store card numbers, security codes or wallet balances.
+
+A payment intent is tied to one customer-owned booking and is created with an Idempotency-Key. Fixed-price bookings use the immutable booking price snapshot; quote-based bookings require the latest customer-accepted quote. The API marks a booking paid only after a signed webhook has been accepted and a server-to-server verification call matches the stored provider reference, transaction reference, amount and currency. Webhook event IDs are stored for replay protection, and transient verification failures can be retried.
+
+Currency allowlists and gateway credentials are runtime configuration. A supported currency in code does not prove that a merchant account has collection/payout access in that market. Before enabling a country, verify the specific gateway product, merchant onboarding, settlement currency, payout corridor, fees, chargeback/refund rules and applicable regulation. Payment remains disabled when the gateway is not configured.
+
+Migration 006 introduces ledgers for payment intents, provider transactions, allocations, refund requests, payouts and webhook receipts. Refund and payout transfers are not executed by the current API; these tables do not prove that funds have moved. Final allocation rules, reconciliation, settlement accounts and actual refund/payout provider integration remain to be implemented.
+
+## Reviews and disputes model
+
+A customer can create one review for a completed booking. The business may publish a response. One dispute can be opened for an eligible booking; customer and business participants can add messages while the case is open. The initial admin review/resolution endpoint uses SWIFTSERVE_ADMIN_API_KEY as a temporary gate. It does not identify the acting administrator in the database. A proper admin account/role, actor-attributed audit trail, evidence attachments and case service-level workflow are future work.
 
 ## Provider operations model
 
