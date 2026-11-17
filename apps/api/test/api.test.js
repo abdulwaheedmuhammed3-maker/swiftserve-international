@@ -1253,9 +1253,34 @@ test('provider onboarding, verification, invitation, assignment and job completi
     const originalFetch=globalThis.fetch;
     let initializedReference=null;
     let initializeCalls=0;
+    let flutterwaveReference=null;
+    let flutterwaveInitializeCalls=0;
     globalThis.fetch=async(input,options={})=>{
       const target=String(input);
       if(target.startsWith(base+'/'))return originalFetch(input,options);
+      if(target==='https://api.flutterwave.com/v3/payments'){
+        flutterwaveInitializeCalls+=1;
+        const payload=JSON.parse(options.body);
+        flutterwaveReference=payload.tx_ref;
+        assert.equal(payload.amount,2250);
+        assert.equal(payload.currency,'NGN');
+        return new Response(JSON.stringify({
+          status:'success',
+          data:{link:'https://checkout.example/flutterwave/'+payload.tx_ref}
+        }),{status:200,headers:{'Content-Type':'application/json'}});
+      }
+      if(target.startsWith('https://api.flutterwave.com/v3/transactions/')){
+        return new Response(JSON.stringify({
+          status:'success',
+          data:{
+            id:87654321,
+            tx_ref:flutterwaveReference,
+            status:'successful',
+            amount:2250,
+            currency:'NGN'
+          }
+        }),{status:200,headers:{'Content-Type':'application/json'}});
+      }
       if(target==='https://api.paystack.co/transaction/initialize'){
         initializeCalls+=1;
         const payload=JSON.parse(options.body);
@@ -1346,6 +1371,73 @@ test('provider onboarding, verification, invitation, assignment and job completi
       });
       assert.equal(duplicateWebhook.status,200);
       assert.equal(duplicateWebhook.body.data.duplicate,true);
+
+      const secondRequestedAt=new Date(Date.now()+10*24*60*60*1000).toISOString();
+      const secondBooking=await request(base,'/api/v1/customer/bookings',{
+        method:'POST',
+        headers:customer.headers,
+        body:JSON.stringify({
+          serviceId:service.body.data.id,
+          locationId:location.body.data.id,
+          requestedStartAt:secondRequestedAt
+        })
+      });
+      assert.equal(secondBooking.status,201);
+
+      const secondQuote=await request(base,'/api/v1/business/bookings/'+secondBooking.body.data.id+'/quotes',{
+        method:'POST',
+        headers:owner.headers,
+        body:JSON.stringify({amountMinor:225000,message:'Second gateway test quote.'})
+      });
+      assert.equal(secondQuote.status,201);
+      const secondQuoteAccepted=await request(base,'/api/v1/customer/bookings/'+secondBooking.body.data.id+'/quotes/'+secondQuote.body.data.id+'/response',{
+        method:'POST',
+        headers:customer.headers,
+        body:JSON.stringify({action:'accept'})
+      });
+      assert.equal(secondQuoteAccepted.status,200);
+      assert.equal(secondQuoteAccepted.body.data.status,'confirmed');
+
+      process.env.PAYMENT_PROVIDER='flutterwave';
+      process.env.FLUTTERWAVE_SECRET_KEY='FLWSECK_TEST-placeholder';
+      process.env.FLUTTERWAVE_WEBHOOK_SECRET_HASH='flutterwave-test-webhook-secret';
+
+      const flutterwaveCheckout=await request(base,'/api/v1/customer/bookings/'+secondBooking.body.data.id+'/payment-intents',{
+        method:'POST',
+        headers:{...customer.headers,'Idempotency-Key':'flutterwave-payment-test-0001'},
+        body:JSON.stringify({})
+      });
+      assert.equal(flutterwaveCheckout.status,201);
+      assert.equal(flutterwaveCheckout.body.data.providerCode,'flutterwave');
+      assert.equal(flutterwaveCheckout.body.data.amountMinor,225000);
+      assert.equal(flutterwaveCheckout.body.data.currencyCode,'NGN');
+      assert.match(flutterwaveCheckout.body.data.checkoutUrl,/^https:\/\/checkout\.example\/flutterwave\//);
+      assert.equal(flutterwaveInitializeCalls,1);
+
+      const flutterwaveWebhookRaw=JSON.stringify({
+        event:'charge.completed',
+        data:{
+          id:87654321,
+          tx_ref:flutterwaveCheckout.body.data.providerReference,
+          status:'successful'
+        }
+      });
+      const flutterwaveWebhook=await request(base,'/api/v1/webhooks/payments/flutterwave',{
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'verif-hash':'flutterwave-test-webhook-secret'
+        },
+        body:flutterwaveWebhookRaw
+      });
+      assert.equal(flutterwaveWebhook.status,200);
+      assert.equal(flutterwaveWebhook.body.data.paid,true);
+
+      const secondPaidBooking=await request(base,'/api/v1/customer/bookings/'+secondBooking.body.data.id,{
+        headers:customer.headers
+      });
+      assert.equal(secondPaidBooking.status,200);
+      assert.equal(secondPaidBooking.body.data.paymentStatus,'paid');
     }finally{
       globalThis.fetch=originalFetch;
     }
