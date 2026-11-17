@@ -102,6 +102,87 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
       headers: second.headers
     });
 
+    const service = await call('/api/v1/business/services', {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify({
+        category: 'cleaning',
+        name: 'PostgreSQL Test Cleaning',
+        slug: 'postgresql-test-cleaning',
+        description: 'A realistic service listing used for PostgreSQL integration checks.',
+        pricingModel: 'fixed',
+        currencyCode: 'NGN',
+        priceMinor: 250000,
+        durationMinutes: 120
+      })
+    });
+    assert.equal(service.status, 201);
+    const serviceList = await call('/api/v1/business/services', { headers: first.headers });
+    assert.equal(serviceList.status, 200);
+    assert.equal(serviceList.body.data.length, 1);
+
+    const branch = await call('/api/v1/business/branches', {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify({
+        name: 'Integration Branch',
+        countryCode: 'NG',
+        addressLine1: '12 Integration Road',
+        city: 'Ilorin',
+        isPrimary: true
+      })
+    });
+    assert.equal(branch.status, 201);
+
+    const hours = await call('/api/v1/business/hours', {
+      method: 'PUT',
+      headers: first.headers,
+      body: JSON.stringify({
+        branchId: branch.body.data.id,
+        dayOfWeek: 1,
+        opensAt: '08:00',
+        closesAt: '17:00',
+        isClosed: false
+      })
+    });
+    assert.equal(hours.status, 200);
+
+    const area = await call('/api/v1/business/service-areas', {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify({
+        branchId: branch.body.data.id,
+        countryCode: 'NG',
+        region: 'Kwara',
+        city: 'Ilorin'
+      })
+    });
+    assert.equal(area.status, 201);
+
+    const invitation = await call('/api/v1/business/team/invitations', {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify({ email: second.email, role: 'staff' })
+    });
+    assert.equal(invitation.status, 201);
+    assert.equal('tokenHash' in invitation.body.data.invitation, false);
+
+    const acceptedInvitation = await call('/api/v1/auth/invitations/accept', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + second.accessToken },
+      body: JSON.stringify({ invitationToken: invitation.body.data.invitationToken })
+    });
+    assert.equal(acceptedInvitation.status, 200);
+    assert.equal(acceptedInvitation.body.data.businessId, first.business.id);
+
+    const invitedMemberProfile = await call('/api/v1/business/profile', {
+      headers: {
+        Authorization: 'Bearer ' + second.accessToken,
+        'X-SwiftServe-Business-Id': first.business.id
+      }
+    });
+    assert.equal(invitedMemberProfile.status, 200);
+
     assert.equal(firstList.status, 200);
     assert.equal(firstList.body.count, 1);
     assert.equal(secondList.status, 200);

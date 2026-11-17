@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { handleBusinessApi } from './business_api.js';
+import { acceptInvitation } from './business_resources.js';
 import {
   authenticateAccessToken,
   getAccountProfile,
@@ -385,6 +387,55 @@ export async function requestHandler(req, res) {
       if (error?.code === 'BODY_TOO_LARGE') return json(res, 413, errorResponse('BODY_TOO_LARGE', error.message));
       if (error?.code === 'EMAIL_ALREADY_REGISTERED') return json(res, 409, errorResponse('EMAIL_ALREADY_REGISTERED', error.message));
       logSafeError('authentication_request_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/auth/invitations/accept') {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return json(res, 405, errorResponse('METHOD_NOT_ALLOWED', 'HTTP method is not supported for this route.'));
+    }
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const body = await readJsonBody(req);
+      if (!body || typeof body !== 'object' || typeof body.invitationToken !== 'string' ||
+          !/^[a-f0-9]{64}$/i.test(body.invitationToken)) {
+        return json(res, 422, errorResponse('VALIDATION_ERROR', 'Invitation acceptance requires a valid invitationToken.'));
+      }
+      const accepted = await acceptInvitation(
+        body.invitationToken,
+        authenticated.user.id,
+        authenticated.user.email
+      );
+      if (!accepted) return json(res, 404, errorResponse('INVITATION_NOT_FOUND', 'Invitation is invalid, expired, revoked or addressed to another email.'));
+      return json(res, 200, { data: accepted });
+    } catch (error) {
+      if (error?.code === 'INVALID_JSON') return json(res, 400, errorResponse('INVALID_JSON', error.message));
+      if (error?.code === 'UNSUPPORTED_MEDIA_TYPE') return json(res, 415, errorResponse('UNSUPPORTED_MEDIA_TYPE', error.message));
+      if (error?.code === 'BODY_TOO_LARGE') return json(res, 413, errorResponse('BODY_TOO_LARGE', error.message));
+      logSafeError('invitation_acceptance_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/business' || url.pathname.startsWith('/api/v1/business/')) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const business = await resolveBusinessContext(req, authenticated.user);
+      if (business.error) return json(res, business.status, business.error);
+      const response = await handleBusinessApi(
+        req, url, business.businessId, authenticated.user, business.membership
+      );
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('business_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
     }
   }

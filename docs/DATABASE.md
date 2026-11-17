@@ -14,8 +14,9 @@ Never paste database credentials into chat, commit them to GitHub, or place them
 - [x] Parameterized SQL repository operations.
 - [x] Initial service-request schema.
 - [x] User, business, membership and session data model.
+- [x] Business profile fields, branches, catalogue, hours, service areas and invitations.
 - [x] Business-scoped service-request reads and writes in the API repository.
-- [ ] Apply migrations 001 and 002 to the actual development database.
+- [ ] Apply migrations 001, 002 and 003 to the actual development database.
 - [x] Add an ordered migration runner with checksums and applied-migration history.
 - [x] Add PostgreSQL integration tests for accounts, sessions and business isolation in CI.
 - [ ] Verify records survive API restarts.
@@ -57,6 +58,21 @@ Migration 002 adds:
 
 Password hashes use scrypt. Raw bearer tokens are returned once at registration/login and are not stored in the database; only a SHA-256 hash is stored. Sessions expire after seven days and can be revoked at logout.
 
+## Business workspace data model
+
+Migration 003 adds the following business-owned resources:
+
+- businesses profile fields for description, business contact details, website, country, currency and time zone;
+- business_branches with addresses, contact details, active status and a single primary branch per business;
+- business_services with category, slug, description, fixed/hourly/quote pricing, currency and optional duration;
+- business_hours for weekly opening times at business or branch level;
+- business_service_areas for supported country, region, city and postal-code prefixes;
+- business_invitations with role, token hash, inviter, expiry and acceptance status.
+
+The branch foreign keys include business_id as part of the reference, preventing a branch from another business from being attached to a business's hours or service coverage. Service catalogue prices are stored in the smallest currency unit and must be interpreted using the configured currency. The current model does not yet include tax, discounts, travel fees or provider commission.
+
+Invitation tokens are stored as hashes. Since no email provider is connected, the API returns the raw token once to the authorized inviter with a pending-delivery notice. The inviter must share it privately. Email verification and automated email delivery remain future work.
+
 ## Existing data and backfill
 
 Migration 002 deliberately adds nullable business ownership columns to existing service_requests. It does not automatically assign old requests to a new business. Requests with NULL business_id are not visible in the authenticated business API.
@@ -66,12 +82,12 @@ Before retaining old records, identify their true owner and use a reviewed, audi
 ## Local setup
 
 1. Create a development PostgreSQL database with your chosen managed provider.
-2. Apply migrations 001 and 002 in order.
-3. Copy apps/api/.env.example to apps/api/.env.
-4. Set DATABASE_URL in the local environment. Do not commit the .env file.
+2. Copy apps/api/.env.example to apps/api/.env.
+3. Set DATABASE_URL in the local environment. Do not commit the .env file.
+4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001, 002 and 003 in order.
 5. Start the API and open /readyz. It should report PostgreSQL storage when the connection succeeds.
-6. Register a test business account and create a test request.
-7. Restart the API, sign in again, and verify that the account, business and request remain.
+6. Register a test business account, create a service, add a branch and set its hours.
+7. Restart the API, sign in again, and verify that the account, business and records remain.
 
 For deployment, add DATABASE_URL as a secret environment variable in the hosting provider. Do not put it in frontend code, a GitHub source file or a public CI log.
 

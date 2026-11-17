@@ -590,3 +590,204 @@ test('invalid status filters return 400', async () => {
     await stopTestServer(server);
   }
 });
+
+
+test('business profile can be read and edited only by authorized members', async () => {
+  const server = await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const account=await registerBusiness(base);
+    const profile=await request(base,'/api/v1/business/profile',{headers:account.headers});
+    assert.equal(profile.status,200);
+    assert.equal(profile.body.data.name,'Test Home Services');
+
+    const updated=await request(base,'/api/v1/business/profile',{
+      method:'PATCH',
+      headers:account.headers,
+      body:JSON.stringify({
+        name:'SwiftServe Ilorin Services',
+        phoneE164:'+2348012345678',
+        countryCode:'ng',
+        currencyCode:'ngn',
+        timeZone:'Africa/Lagos'
+      })
+    });
+    assert.equal(updated.status,200);
+    assert.equal(updated.body.data.name,'SwiftServe Ilorin Services');
+    assert.equal(updated.body.data.countryCode,'NG');
+    assert.equal(updated.body.data.currencyCode,'NGN');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('business service catalogue supports create, list, update and delete', async () => {
+  const server=await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const account=await registerBusiness(base);
+    const created=await request(base,'/api/v1/business/services',{
+      method:'POST',
+      headers:account.headers,
+      body:JSON.stringify({
+        category:'cleaning',
+        name:'Apartment deep clean',
+        slug:'apartment-deep-clean',
+        description:'A detailed cleaning service for apartments and homes.',
+        pricingModel:'fixed',
+        currencyCode:'NGN',
+        priceMinor:450000,
+        durationMinutes:180
+      })
+    });
+    assert.equal(created.status,201);
+    const id=created.body.data.id;
+    const list=await request(base,'/api/v1/business/services',{headers:account.headers});
+    assert.equal(list.status,200);
+    assert.equal(list.body.data.length,1);
+
+    const updated=await request(base,'/api/v1/business/services/'+id,{
+      method:'PATCH',
+      headers:account.headers,
+      body:JSON.stringify({priceMinor:500000,isActive:false})
+    });
+    assert.equal(updated.status,200);
+    assert.equal(updated.body.data.priceMinor,500000);
+    assert.equal(updated.body.data.isActive,false);
+
+    const deleted=await request(base,'/api/v1/business/services/'+id,{
+      method:'DELETE',headers:account.headers
+    });
+    assert.equal(deleted.status,204);
+    const missing=await request(base,'/api/v1/business/services/'+id,{headers:account.headers});
+    assert.equal(missing.status,404);
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('business branches, opening hours and service areas remain tenant-scoped', async () => {
+  const server=await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const account=await registerBusiness(base);
+    const branchResponse=await request(base,'/api/v1/business/branches',{
+      method:'POST',
+      headers:account.headers,
+      body:JSON.stringify({
+        name:'Tanke Branch',
+        countryCode:'NG',
+        addressLine1:'12 University Road',
+        city:'Ilorin',
+        region:'Kwara',
+        isPrimary:true
+      })
+    });
+    assert.equal(branchResponse.status,201);
+    const branchId=branchResponse.body.data.id;
+
+    const hours=await request(base,'/api/v1/business/hours',{
+      method:'PUT',
+      headers:account.headers,
+      body:JSON.stringify({
+        branchId,
+        dayOfWeek:1,
+        opensAt:'08:00',
+        closesAt:'17:00',
+        isClosed:false
+      })
+    });
+    assert.equal(hours.status,200);
+    assert.equal(hours.body.data.branchId,branchId);
+
+    const area=await request(base,'/api/v1/business/service-areas',{
+      method:'POST',
+      headers:account.headers,
+      body:JSON.stringify({
+        branchId,
+        countryCode:'NG',
+        region:'Kwara',
+        city:'Ilorin'
+      })
+    });
+    assert.equal(area.status,201);
+    assert.equal(area.body.data.branchId,branchId);
+
+    const list=await request(base,'/api/v1/business/branches',{headers:account.headers});
+    assert.equal(list.body.data.length,1);
+    assert.equal(list.body.data[0].id,branchId);
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('team invitations add only the invited email to the selected business', async () => {
+  const server=await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const owner=await registerBusiness(base,'owner-team@example.com','Team Test Business');
+    const invited=await request(base,'/api/v1/auth/register',{
+      method:'POST',
+      body:JSON.stringify({
+        email:'staff-member@example.com',
+        password:'StrongPass#12345',
+        fullName:'Invited Staff',
+        accountType:'customer'
+      })
+    });
+    assert.equal(invited.status,201);
+
+    const created=await request(base,'/api/v1/business/team/invitations',{
+      method:'POST',
+      headers:owner.headers,
+      body:JSON.stringify({email:'staff-member@example.com',role:'staff'})
+    });
+    assert.equal(created.status,201);
+    assert.equal(created.body.data.invitation.email,'staff-member@example.com');
+    assert.equal(created.body.data.delivery,'pending');
+
+    const accepted=await request(base,'/api/v1/auth/invitations/accept',{
+      method:'POST',
+      headers:{Authorization:'Bearer '+invited.body.data.accessToken},
+      body:JSON.stringify({invitationToken:created.body.data.invitationToken})
+    });
+    assert.equal(accepted.status,200);
+    assert.equal(accepted.body.data.businessId,owner.businessId);
+
+    const members=await request(base,'/api/v1/business/team/members',{headers:owner.headers});
+    assert.equal(members.status,200);
+    assert.equal(members.body.data.length,2);
+    assert.ok(members.body.data.some(item=>item.email==='staff-member@example.com' && item.role==='staff'));
+
+    const staffHeaders={
+      Authorization:'Bearer '+invited.body.data.accessToken,
+      'X-SwiftServe-Business-Id':owner.businessId
+    };
+    const forbidden=await request(base,'/api/v1/business/profile',{
+      method:'PATCH',headers:staffHeaders,body:JSON.stringify({name:'Unauthorized Edit'})
+    });
+    assert.equal(forbidden.status,403);
+    assert.equal(forbidden.body.error.code,'INSUFFICIENT_ROLE');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('business resources cannot be accessed by another business', async () => {
+  const server=await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    const first=await registerBusiness(base,'business-one@example.com','Business One');
+    const second=await registerBusiness(base,'business-two@example.com','Business Two');
+    const forbidden=await request(base,'/api/v1/business/profile',{
+      headers:{
+        Authorization:'Bearer '+second.accessToken,
+        'X-SwiftServe-Business-Id':first.businessId
+      }
+    });
+    assert.equal(forbidden.status,403);
+    assert.equal(forbidden.body.error.code,'BUSINESS_ACCESS_DENIED');
+  } finally {
+    await stopTestServer(server);
+  }
+});

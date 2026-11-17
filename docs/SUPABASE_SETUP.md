@@ -34,6 +34,7 @@ The current migration files are:
 
 1. apps/api/db/migrations/001_initial_schema.sql
 2. apps/api/db/migrations/002_identity_business_scope.sql
+3. apps/api/db/migrations/003_business_operations.sql
 
 For Render, configure the start command to run migrations before the server:
 
@@ -61,6 +62,6 @@ GitHub Actions runs a temporary PostgreSQL 16 database, applies the migrations, 
 
 Migration 002 adds nullable ownership columns to existing service requests. Older requests are not automatically assigned to a business and remain hidden from authenticated business request endpoints until their ownership is reviewed and backfilled deliberately.
 
-The platform is not production-ready. Authentication and business isolation are an early foundation; email verification, account recovery, MFA, customer bookings, provider operations, notifications, verification workflows, payment handling and operational support are still incomplete.
+The platform is not production-ready. Business profile, catalogue, branch, hours, service-area and team-invitation endpoints are available in this development stage. Automated invitation email delivery, customer discovery and bookings, provider operations, provider verification, payments, notifications, reviews and operational support are still incomplete.
 
 Before a pilot, configure a least-privilege database role, TLS, separate development and production environments, automated backups and restore tests, privacy and retention procedures. Rotate the database password immediately if it is accidentally exposed.
