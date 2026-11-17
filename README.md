@@ -190,14 +190,14 @@ Business provider-management routes require a business bearer token and X-SwiftS
 | GET / POST | /api/v1/business/bookings/:id/assignments | List or offer a booking assignment |
 | DELETE | /api/v1/business/bookings/:id/assignments/:assignmentId | Cancel an active assignment |
 
-Provider invitation delivery is not automated. The API returns the invitation token once to the authorized business user; share it privately with the invited provider. Verification approval is a protected manual review operation. Configure SWIFTSERVE_ADMIN_API_KEY as a secret environment variable before using these endpoints:
+Provider invitation delivery is not automated. The API returns the invitation token once to the authorized business user; share it privately with the invited provider. Verification approval is a protected manual review operation. Create the first platform super administrator using the one-time SWIFTSERVE_ADMIN_BOOTSTRAP_KEY secret, then sign in with an individual admin account. Bootstrap can only succeed once; remove or rotate the secret immediately afterwards:
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET | /api/v1/admin/providers/pending | List providers awaiting review |
 | PATCH | /api/v1/admin/providers/:userId/verification | Approve or reject a provider |
 
-The admin key must never be committed to GitHub or placed in Android/mobile code. Provider identity-document file uploads and storage are not implemented; approval is an operational review flag, not automated identity verification. Admin-key actions are recorded in the audit log under the configured key label. Since the current system uses a shared API key rather than individual administrator accounts, the label identifies a credential, not the human who used it.
+Administrator bearer sessions must never be committed to GitHub or placed in Android/mobile code. Provider identity-document file uploads and storage are not implemented; approval remains an operational review flag, not automated identity verification. Administrative actions are attributed to the authenticated administrator account.
 
 ### Payments, refunds and provider payouts
 
@@ -209,8 +209,7 @@ Online payment collection is implemented through a server-side Paystack adapter.
 | PAYSTACK_SECRET_KEY | Server-side Paystack secret key |
 | PAYSTACK_WEBHOOK_SECRET | Paystack webhook HMAC secret (or PAYSTACK_WEBHOOK_SECRETS for rotated keys) |
 | PAYSTACK_CALLBACK_URL | Optional checkout return URL |
-| SWIFTSERVE_ADMIN_API_KEY | Shared secret protecting provider review, payout, dispute, audit and reconciliation administration |
-| SWIFTSERVE_ADMIN_ACTOR_ID | Optional non-secret label identifying which admin key was used in audit logs; defaults to shared-admin-key and does not identify an individual person |
+| SWIFTSERVE_ADMIN_BOOTSTRAP_KEY | One-time secret used to create the first super administrator; remove or rotate after bootstrap |
 | SWIFTSERVE_PLATFORM_FEE_BPS | Platform fee in basis points; defaults to 0 and is capped at 5,000 (50%) |
 
 Never add gateway or admin secrets to Android, frontend code, GitHub source files, screenshots or client responses. Start with Paystack test credentials and a test account. The API accepts payment success only after its server verifies the transaction reference, amount and currency with Paystack. A browser return or unsigned webhook cannot mark a payment successful.
@@ -242,8 +241,8 @@ Providers can register a payout recipient through Paystack and view their payout
 |---|---|---|
 | GET / POST / PUT | /api/v1/provider/payout-account | View or register a provider payout recipient |
 | GET | /api/v1/provider/payouts | View provider payout ledger entries |
-| GET | /api/v1/admin/payouts/pending | List payout entries awaiting transfer (admin key required) |
-| POST | /api/v1/admin/payouts/:id/process | Initiate a provider transfer (admin key required) |
+| GET | /api/v1/admin/payouts/pending | List payout entries awaiting transfer (administrator session and role required) |
+| POST | /api/v1/admin/payouts/:id/process | Initiate a provider transfer (administrator session and role required) |
 
 The current payout-account registration supports Nigerian Naira (NGN) NUBAN bank accounts only. The full bank account number is sent to Paystack over HTTPS and is not stored by SwiftServe; the database retains the provider recipient code and masked account details. Payouts are created from completed provider assignments and verified booking payments. The platform fee defaults to zero until an agreed business rate is configured. Payout processing is manually initiated by an authorized administrator; transfer webhooks update the payout status.
 
@@ -259,8 +258,8 @@ The current payout-account registration supports Nigerian Naira (NGN) NUBAN bank
 | GET | /api/v1/business/disputes | List business disputes |
 | GET / POST | /api/v1/business/bookings/:id/dispute | View or open a business-side dispute |
 | GET / POST | /api/v1/business/disputes/:id/messages | View or respond to a dispute |
-| GET | /api/v1/admin/disputes/pending | List open/in-review disputes (admin key required) |
-| PATCH | /api/v1/admin/disputes/:id | Move a dispute to review or record a resolution (admin key required) |
+| GET | /api/v1/admin/disputes/pending | List open/in-review disputes (administrator session and role required) |
+| PATCH | /api/v1/admin/disputes/:id | Move a dispute to review or record a resolution (administrator session and role required) |
 
 Reviews require a completed booking and are limited to one review per booking. Dispute messages are scoped to the booking's customer or business. The current dispute workflow records status and resolution decisions; it does not automatically issue a refund, adjudicate uploaded evidence, or provide a complete support case-management interface.
 
@@ -270,7 +269,7 @@ Migration 007 adds a persistent admin audit trail, reconciliation run history an
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | /api/v1/admin/audit-logs?limit=50 | List recent administrator audit events (admin key required) |
+| GET | /api/v1/admin/audit-logs?limit=50 | List recent administrator audit events (administrator session and role required) |
 | GET | /api/v1/admin/finance/summary | View pending payments/refunds/payouts, reversals and open disputes |
 | GET | /api/v1/admin/finance/reconciliation | List recent reconciliation runs |
 | POST | /api/v1/admin/finance/reconciliation | Verify up to 50 pending payments, unresolved transfers and pending refunds |
@@ -280,7 +279,7 @@ A reconciliation run verifies pending payment intents and processing/failed payo
 
 POST reconciliation accepts an optional JSON body such as {"limit":25}. The limit is bounded to 1–50 and the endpoint requires PAYSTACK_SECRET_KEY. Each run stores the local and provider statuses, amount/currency comparison, outcome and a sanitized provider response snapshot. Outcomes include matched, updated, pending, mismatch, manual_review and error. Review/error/pending outcomes cause the run to be marked partial rather than silently complete.
 
-The audit actor label is not an identity system. Full administrator accounts, individual attribution, role-based permissions, MFA and key rotation/management remain future work. Never expose the admin key in a mobile app or browser.
+The audit trail now records the authenticated platform administrator account. Supported roles are super_admin, finance_admin, support_admin and provider_reviewer. MFA/TOTP and recovery workflows are not implemented yet. Never expose administrator session tokens in a mobile app or browser.
 
 ### Finance and trust limitations
 
