@@ -272,6 +272,39 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(quoteAccepted.status, 200);
     assert.equal(quoteAccepted.body.data.status, 'confirmed');
 
+    const paymentKeys = [
+      'PAYMENT_PROVIDER','PAYMENT_RETURN_URL','PAYSTACK_SECRET_KEY',
+      'PAYSTACK_WEBHOOK_SECRET','FLUTTERWAVE_SECRET_KEY','FLUTTERWAVE_WEBHOOK_SECRET_HASH'
+    ];
+    const previousPaymentEnv = Object.fromEntries(paymentKeys.map(key => [key, process.env[key]]));
+    for (const key of paymentKeys) delete process.env[key];
+
+    const paymentMissingKey = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/payment-intents', {
+      method: 'POST',
+      headers: customerHeaders,
+      body: JSON.stringify({})
+    });
+    assert.equal(paymentMissingKey.status, 400);
+
+    const paymentDisabled = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/payment-intents', {
+      method: 'POST',
+      headers: { ...customerHeaders, 'Idempotency-Key': 'pg-payment-intent-test-0001' },
+      body: JSON.stringify({})
+    });
+    assert.equal(paymentDisabled.status, 503);
+    assert.equal(paymentDisabled.body.error.code, 'PAYMENTS_DISABLED');
+
+    const invalidWebhook = await call('/api/v1/webhooks/payments/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': '00' },
+      body: JSON.stringify({ event: 'charge.success', data: { id: 100, reference: 'fake-reference' } })
+    });
+    assert.equal(invalidWebhook.status, 401);
+    for (const key of paymentKeys) {
+      if (previousPaymentEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousPaymentEnv[key];
+    }
+
     const providerEmail = 'integration-provider-' + randomUUID() + '@example.test';
     const providerRegistration = await call('/api/v1/auth/register', {
       method: 'POST',
@@ -424,39 +457,6 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     });
     assert.equal(finalBooking.status, 200);
     assert.equal(finalBooking.body.data.status, 'completed');
-
-    const paymentKeys = [
-      'PAYMENT_PROVIDER','PAYMENT_RETURN_URL','PAYSTACK_SECRET_KEY',
-      'PAYSTACK_WEBHOOK_SECRET','FLUTTERWAVE_SECRET_KEY','FLUTTERWAVE_WEBHOOK_SECRET_HASH'
-    ];
-    const previousPaymentEnv = Object.fromEntries(paymentKeys.map(key => [key, process.env[key]]));
-    for (const key of paymentKeys) delete process.env[key];
-
-    const paymentMissingKey = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/payment-intents', {
-      method: 'POST',
-      headers: customerHeaders,
-      body: JSON.stringify({})
-    });
-    assert.equal(paymentMissingKey.status, 400);
-
-    const paymentDisabled = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/payment-intents', {
-      method: 'POST',
-      headers: { ...customerHeaders, 'Idempotency-Key': 'pg-payment-intent-test-0001' },
-      body: JSON.stringify({})
-    });
-    assert.equal(paymentDisabled.status, 503);
-    assert.equal(paymentDisabled.body.error.code, 'PAYMENTS_DISABLED');
-
-    const invalidWebhook = await call('/api/v1/webhooks/payments/paystack', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': '00' },
-      body: JSON.stringify({ event: 'charge.success', data: { id: 100, reference: 'fake-reference' } })
-    });
-    assert.equal(invalidWebhook.status, 401);
-    for (const key of paymentKeys) {
-      if (previousPaymentEnv[key] === undefined) delete process.env[key];
-      else process.env[key] = previousPaymentEnv[key];
-    }
 
     const createdReview = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/review', {
       method: 'POST',
