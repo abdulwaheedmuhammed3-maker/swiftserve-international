@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   service_category_snapshot TEXT NOT NULL,
   pricing_model_snapshot TEXT NOT NULL CHECK (pricing_model_snapshot IN ('fixed', 'hourly', 'quote')),
   currency_code CHAR(3) NOT NULL,
+  service_price_minor_snapshot BIGINT CHECK (service_price_minor_snapshot IS NULL OR service_price_minor_snapshot >= 0),
   service_address_recipient VARCHAR(100) NOT NULL,
   service_address_phone VARCHAR(20),
   service_country_code CHAR(2) NOT NULL,
