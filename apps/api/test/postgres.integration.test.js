@@ -183,6 +183,113 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     });
     assert.equal(invitedMemberProfile.status, 200);
 
+    const customerRegistration = await call('/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'integration-customer-' + randomUUID() + '@example.test',
+        password: 'Integration-Strong#12345',
+        fullName: 'Integration Customer',
+        accountType: 'customer'
+      })
+    });
+    assert.equal(customerRegistration.status, 201);
+    const customerUser = customerRegistration.body.data.user;
+    userIds.push(customerUser.id);
+    const customerHeaders = {
+      Authorization: 'Bearer ' + customerRegistration.body.data.accessToken
+    };
+
+    const profile = await call('/api/v1/customer/profile', {
+      method: 'PATCH',
+      headers: customerHeaders,
+      body: JSON.stringify({ phoneE164: '+2348012345678', locale: 'en-NG' })
+    });
+    assert.equal(profile.status, 200);
+    assert.equal(profile.body.data.phoneE164, '+2348012345678');
+
+    const savedLocation = await call('/api/v1/customer/locations', {
+      method: 'POST',
+      headers: customerHeaders,
+      body: JSON.stringify({
+        label: 'Home',
+        recipientName: 'Integration Customer',
+        phoneE164: '+2348012345678',
+        countryCode: 'NG',
+        addressLine1: '25 Integration Street',
+        city: 'Ilorin',
+        region: 'Kwara',
+        isDefault: true
+      })
+    });
+    assert.equal(savedLocation.status, 201);
+
+    const booking = await call('/api/v1/customer/bookings', {
+      method: 'POST',
+      headers: customerHeaders,
+      body: JSON.stringify({
+        serviceId: service.body.data.id,
+        locationId: savedLocation.body.data.id,
+        requestedStartAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+        customerNotes: 'Please call before arrival.'
+      })
+    });
+    assert.equal(booking.status, 201);
+    assert.equal(booking.body.data.businessId, first.business.id);
+    assert.equal(booking.body.data.status, 'requested');
+
+    const businessBookings = await call('/api/v1/business/bookings', {
+      headers: first.headers
+    });
+    assert.equal(businessBookings.status, 200);
+    assert.ok(businessBookings.body.data.some(item => item.id === booking.body.data.id));
+
+    const quote = await call('/api/v1/business/bookings/' + booking.body.data.id + '/quotes', {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify({
+        amountMinor: 275000,
+        message: 'The quote covers labour and standard materials.'
+      })
+    });
+    assert.equal(quote.status, 201);
+    assert.equal(quote.body.data.currencyCode, 'NGN');
+
+    const customerQuotes = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/quotes', {
+      headers: customerHeaders
+    });
+    assert.equal(customerQuotes.status, 200);
+    assert.equal(customerQuotes.body.data.length, 1);
+
+    const quoteAccepted = await call(
+      '/api/v1/customer/bookings/' + booking.body.data.id + '/quotes/' + quote.body.data.id + '/response',
+      {
+        method: 'POST',
+        headers: customerHeaders,
+        body: JSON.stringify({ action: 'accept' })
+      }
+    );
+    assert.equal(quoteAccepted.status, 200);
+    assert.equal(quoteAccepted.body.data.status, 'confirmed');
+
+    const otherBusinessBookings = await call('/api/v1/business/bookings', {
+      headers: second.headers
+    });
+    assert.equal(otherBusinessBookings.status, 200);
+    assert.equal(otherBusinessBookings.body.data.length, 0);
+
+    const customerNotifications = await call('/api/v1/notifications', {
+      headers: customerHeaders
+    });
+    assert.equal(customerNotifications.status, 200);
+    assert.ok(customerNotifications.body.data.some(item => item.type === 'booking_quote'));
+
+    const bookingEvents = await call('/api/v1/customer/bookings/' + booking.body.data.id + '/events', {
+      headers: customerHeaders
+    });
+    assert.equal(bookingEvents.status, 200);
+    assert.ok(bookingEvents.body.data.some(item => item.toStatus === 'quoted'));
+    assert.ok(bookingEvents.body.data.some(item => item.toStatus === 'confirmed'));
+
     assert.equal(firstList.status, 200);
     assert.equal(firstList.body.count, 1);
     assert.equal(secondList.status, 200);
@@ -209,6 +316,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     server.closeAllConnections?.();
     await new Promise(resolve => server.close(resolve));
     if (businessIds.length) {
+      await pool.query('DELETE FROM bookings WHERE business_id = ANY($1::uuid[])', [businessIds]);
       await pool.query('DELETE FROM service_requests WHERE business_id = ANY($1::uuid[])', [businessIds]);
       await pool.query('DELETE FROM businesses WHERE id = ANY($1::uuid[])', [businessIds]);
     }
