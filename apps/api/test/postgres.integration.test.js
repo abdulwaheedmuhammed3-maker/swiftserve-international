@@ -752,7 +752,18 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
   } finally {
     server.closeAllConnections?.();
     await new Promise(resolve => server.close(resolve));
+    paystackMock.closeAllConnections?.();
+    await new Promise(resolve => paystackMock.close(resolve));
     if (businessIds.length) {
+      await pool.query('DELETE FROM dispute_messages WHERE dispute_id IN (SELECT id FROM disputes WHERE business_id=ANY($1::uuid[]))',[businessIds]);
+      await pool.query('DELETE FROM dispute_events WHERE dispute_id IN (SELECT id FROM disputes WHERE business_id=ANY($1::uuid[]))',[businessIds]);
+      await pool.query('DELETE FROM disputes WHERE business_id=ANY($1::uuid[])',[businessIds]);
+      await pool.query('DELETE FROM booking_reviews WHERE business_id=ANY($1::uuid[])',[businessIds]);
+      await pool.query('DELETE FROM refunds WHERE business_id=ANY($1::uuid[])',[businessIds]);
+      await pool.query('DELETE FROM provider_payout_events WHERE payout_id IN (SELECT id FROM provider_payouts WHERE business_id=ANY($1::uuid[]))',[businessIds]);
+      await pool.query('DELETE FROM provider_payouts WHERE business_id=ANY($1::uuid[])',[businessIds]);
+      await pool.query('DELETE FROM payment_events WHERE payment_intent_id IN (SELECT id FROM payment_intents WHERE business_id=ANY($1::uuid[]))',[businessIds]);
+      await pool.query('DELETE FROM payment_intents WHERE business_id=ANY($1::uuid[])',[businessIds]);
       await pool.query('DELETE FROM bookings WHERE business_id = ANY($1::uuid[])', [businessIds]);
       await pool.query('DELETE FROM service_requests WHERE business_id = ANY($1::uuid[])', [businessIds]);
       await pool.query('DELETE FROM businesses WHERE id = ANY($1::uuid[])', [businessIds]);
@@ -762,5 +773,9 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     }
     await pool.end();
     await closeDatabase();
+    for(const key of envKeys){
+      if(previousEnv[key]===undefined)delete process.env[key];
+      else process.env[key]=previousEnv[key];
+    }
   }
 });
