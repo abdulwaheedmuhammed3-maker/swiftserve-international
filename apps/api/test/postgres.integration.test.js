@@ -700,6 +700,21 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(refundAfterPayout.status,409);
     assert.equal(refundAfterPayout.body.error.code,'REFUND_NOT_AVAILABLE');
 
+    const transferReversed=await sendPaystackWebhook({
+      event:'transfer.reversed',
+      data:{
+        id:123456789,
+        reference:gatewayState.transferReference,
+        status:'reversed',
+        amount:225000,
+        currency:'NGN'
+      }
+    });
+    assert.equal(transferReversed.status,200);
+    const reversedPayouts=await call('/api/v1/provider/payouts',{headers:providerHeaders});
+    assert.equal(reversedPayouts.status,200);
+    assert.equal(reversedPayouts.body.data[0].status,'reversed');
+
     const review=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/review',{
       method:'POST',
       headers:customerHeaders,
