@@ -1372,7 +1372,7 @@ test('payment endpoints fail closed without gateway configuration and reject uns
       body:JSON.stringify({event:'charge.success',data:{reference:'untrusted'}})
     });
     assert.equal(webhook.status,401);
-    assert.equal(webhook.body.error.code,'INVALID_SIGNATURE');
+    assert.equal(webhook.body.error,'Invalid Paystack signature.');
   } finally {
     await stopTestServer(server);
     if(previousSecret===undefined)delete process.env.PAYSTACK_SECRET_KEY;
