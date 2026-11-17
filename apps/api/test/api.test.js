@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 
-// Always use isolated in-memory storage, even when a developer has DATABASE_URL in .env.
+// Tests always use isolated in-memory repositories, regardless of local .env settings.
 process.env.NODE_ENV = 'test';
 const { requestHandler, resetStore } = await import('../src/app.js');
 
@@ -44,75 +44,328 @@ function validJob(overrides = {}) {
   };
 }
 
+async function registerBusiness(base, email = 'owner@example.com', businessName = 'Test Home Services') {
+  const response = await request(base, '/api/v1/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      email,
+      password: 'StrongPass#12345',
+      fullName: 'Test Business Owner',
+      accountType: 'business',
+      businessName,
+      countryCode: 'NG'
+    })
+  });
+  assert.equal(response.status, 201);
+  const data = response.body.data;
+  return {
+    accessToken: data.accessToken,
+    businessId: data.businesses[0].id,
+    user: data.user,
+    headers: {
+      Authorization: 'Bearer ' + data.accessToken,
+      'X-SwiftServe-Business-Id': data.businesses[0].id
+    }
+  };
+}
+
 test.beforeEach(() => resetStore());
 
-test('POST creates a service request', async () => {
+test('business registration creates an owner membership and returns a bearer session', async () => {
   const server = await startTestServer();
   try {
     const base = 'http://127.0.0.1:' + server.address().port;
+    const response = await request(base, '/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'OWNER@EXAMPLE.COM',
+        password: 'StrongPass#12345',
+        fullName: 'Bright Owner',
+        accountType: 'business',
+        businessName: 'SwiftServe Test Business',
+        countryCode: 'NG'
+      })
+    });
+
+    assert.equal(response.status, 201);
+    assert.equal(response.body.data.user.email, 'owner@example.com');
+    assert.equal(response.body.data.user.accountType, 'business');
+    assert.equal(response.body.data.businesses.length, 1);
+    assert.equal(response.body.data.businesses[0].role, 'owner');
+    assert.equal(response.body.data.tokenType, 'Bearer');
+    assert.equal(response.body.data.accessToken.length, 43);
+    assert.equal('passwordHash' in response.body.data.user, false);
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('login returns a new session and logout revokes it', async () => {
+  const server = await startTestServer();
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    await registerBusiness(base);
+
+    const login = await request(base, '/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'OWNER@example.com', password: 'StrongPass#12345' })
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.body.data.user.email, 'owner@example.com');
+
+    const headers = { Authorization: 'Bearer ' + login.body.data.accessToken };
+    const profile = await request(base, '/api/v1/auth/me', { headers });
+    assert.equal(profile.status, 200);
+    assert.equal(profile.body.data.businesses.length, 1);
+
+    const logout = await request(base, '/api/v1/auth/logout', { method: 'POST', headers });
+    assert.equal(logout.status, 200);
+    assert.equal(logout.body.data.loggedOut, true);
+
+    const afterLogout = await request(base, '/api/v1/auth/me', { headers });
+    assert.equal(afterLogout.status, 401);
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('duplicate email registration is rejected case-insensitively', async () => {
+  const server = await startTestServer();
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    await registerBusiness(base, 'owner@example.com');
+
+    const duplicate = await request(base, '/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'OWNER@example.com',
+        password: 'AnotherPass#12345',
+        fullName: 'Another Owner',
+        accountType: 'business',
+        businessName: 'Another Business'
+      })
+    });
+
+    assert.equal(duplicate.status, 409);
+    assert.equal(duplicate.body.error.code, 'EMAIL_ALREADY_REGISTERED');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('invalid registration fields are rejected', async () => {
+  const server = await startTestServer();
+  try {
+    const response = await request('http://127.0.0.1:' + server.address().port, '/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'not-an-email',
+        password: 'weak',
+        fullName: 'A',
+        accountType: 'admin'
+      })
+    });
+
+    assert.equal(response.status, 422);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('incorrect login credentials return a generic authentication error', async () => {
+  const server = await startTestServer();
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    await registerBusiness(base);
+
+    const response = await request(base, '/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'owner@example.com', password: 'WrongPassword#123' })
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal(response.body.error.code, 'INVALID_CREDENTIALS');
+    assert.equal(response.body.error.message, 'Email or password is incorrect.');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('business job endpoints require authentication', async () => {
+  const server = await startTestServer();
+  try {
+    const response = await request('http://127.0.0.1:' + server.address().port, '/api/v1/jobs');
+
+    assert.equal(response.status, 401);
+    assert.equal(response.body.error.code, 'UNAUTHENTICATED');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('business job endpoints require an explicit business context', async () => {
+  const server = await startTestServer();
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
+    const response = await request(base, '/api/v1/jobs', {
+      headers: { Authorization: 'Bearer ' + account.accessToken }
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'BUSINESS_CONTEXT_REQUIRED');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('POST creates a request scoped to the authenticated business', async () => {
+  const server = await startTestServer();
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
     const response = await request(base, '/api/v1/jobs', {
       method: 'POST',
+      headers: account.headers,
       body: JSON.stringify(validJob())
     });
 
     assert.equal(response.status, 201);
     assert.equal(response.body.data.service, 'electrical');
     assert.equal(response.body.data.status, 'pending');
-    assert.ok(response.body.data.id);
+    assert.equal(response.body.data.businessId, account.businessId);
+    assert.equal(response.body.data.createdByUserId, account.user.id);
   } finally {
     await stopTestServer(server);
   }
 });
 
-test('GET lists and retrieves service requests', async () => {
+test('GET lists and retrieves only the selected business requests', async () => {
   const server = await startTestServer();
   try {
     const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
     const created = await request(base, '/api/v1/jobs', {
       method: 'POST',
+      headers: account.headers,
       body: JSON.stringify(validJob({ service: 'plumbing', area: 'GRA, Ilorin' }))
     });
-    const list = await request(base, '/api/v1/jobs');
-    const item = await request(base, '/api/v1/jobs/' + created.body.data.id);
+    const list = await request(base, '/api/v1/jobs', { headers: account.headers });
+    const item = await request(base, '/api/v1/jobs/' + created.body.data.id, { headers: account.headers });
 
     assert.equal(list.status, 200);
     assert.equal(list.body.count, 1);
     assert.equal(item.status, 200);
     assert.equal(item.body.data.id, created.body.data.id);
+    assert.equal(item.body.data.businessId, account.businessId);
   } finally {
     await stopTestServer(server);
   }
 });
 
-test('PATCH updates and DELETE removes a request', async () => {
+test('a business cannot read or change another business requests', async () => {
   const server = await startTestServer();
   try {
     const base = 'http://127.0.0.1:' + server.address().port;
+    const first = await registerBusiness(base, 'first@example.com', 'First Business');
+    const second = await registerBusiness(base, 'second@example.com', 'Second Business');
     const created = await request(base, '/api/v1/jobs', {
       method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify(validJob())
+    });
+    const jobId = created.body.data.id;
+
+    const secondList = await request(base, '/api/v1/jobs', { headers: second.headers });
+    const secondRead = await request(base, '/api/v1/jobs/' + jobId, { headers: second.headers });
+    const secondUpdate = await request(base, '/api/v1/jobs/' + jobId, {
+      method: 'PATCH',
+      headers: second.headers,
+      body: JSON.stringify({ area: 'Another place' })
+    });
+    const secondDelete = await request(base, '/api/v1/jobs/' + jobId, {
+      method: 'DELETE',
+      headers: second.headers
+    });
+
+    assert.equal(secondList.status, 200);
+    assert.equal(secondList.body.count, 0);
+    assert.equal(secondRead.status, 404);
+    assert.equal(secondUpdate.status, 404);
+    assert.equal(secondDelete.status, 404);
+
+    const firstRead = await request(base, '/api/v1/jobs/' + jobId, { headers: first.headers });
+    assert.equal(firstRead.status, 200);
+    assert.equal(firstRead.body.data.area, 'Tanke, Ilorin');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('customer accounts cannot access business requests', async () => {
+  const server = await startTestServer();
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const customer = await request(base, '/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: 'customer@example.com',
+        password: 'StrongPass#12345',
+        fullName: 'Test Customer',
+        accountType: 'customer'
+      })
+    });
+    assert.equal(customer.status, 201);
+
+    const response = await request(base, '/api/v1/jobs', {
+      headers: {
+        Authorization: 'Bearer ' + customer.body.data.accessToken,
+        'X-SwiftServe-Business-Id': '00000000-0000-4000-8000-000000000001'
+      }
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error.code, 'BUSINESS_ACCESS_DENIED');
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test('PATCH updates and DELETE removes a request for the owning business', async () => {
+  const server = await startTestServer();
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
+    const created = await request(base, '/api/v1/jobs', {
+      method: 'POST',
+      headers: account.headers,
       body: JSON.stringify(validJob({ service: 'laundry', description: 'Weekly clothes washing service', area: 'Fate, Ilorin' }))
     });
     const id = created.body.data.id;
     const updated = await request(base, '/api/v1/jobs/' + id, {
       method: 'PATCH',
+      headers: account.headers,
       body: JSON.stringify({ status: 'accepted' })
     });
 
     assert.equal(updated.status, 200);
     assert.equal(updated.body.data.status, 'accepted');
-    assert.equal((await request(base, '/api/v1/jobs/' + id, { method: 'DELETE' })).status, 204);
-    assert.equal((await request(base, '/api/v1/jobs/' + id)).status, 404);
+    assert.equal((await request(base, '/api/v1/jobs/' + id, { method: 'DELETE', headers: account.headers })).status, 204);
+    assert.equal((await request(base, '/api/v1/jobs/' + id, { headers: account.headers })).status, 404);
   } finally {
     await stopTestServer(server);
   }
 });
 
-test('invalid create input returns a validation error', async () => {
+test('invalid job input returns a validation error', async () => {
   const server = await startTestServer();
   try {
     const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
     const response = await request(base, '/api/v1/jobs', {
       method: 'POST',
+      headers: account.headers,
       body: JSON.stringify({ service: 'rocket-launch', description: 'x', area: '' })
     });
 
@@ -126,9 +379,14 @@ test('invalid create input returns a validation error', async () => {
 test('malformed JSON returns 400', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch('http://127.0.0.1:' + server.address().port + '/api/v1/jobs', {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
+    const response = await fetch(base + '/api/v1/jobs', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...account.headers
+      },
       body: '{not-json'
     });
     const body = await response.json();
@@ -140,11 +398,13 @@ test('malformed JSON returns 400', async () => {
   }
 });
 
-test('unsupported method returns 405 and Allow header', async () => {
+test('unsupported job method returns 405 and Allow header', async () => {
   const server = await startTestServer();
   try {
+    const account = await registerBusiness('http://127.0.0.1:' + server.address().port);
     const response = await request('http://127.0.0.1:' + server.address().port, '/api/v1/jobs', {
       method: 'PUT',
+      headers: account.headers,
       body: JSON.stringify({})
     });
 
@@ -199,9 +459,14 @@ test('invalid UUIDs return 400 instead of reaching the database', async () => {
 test('write requests require an application/json content type', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch('http://127.0.0.1:' + server.address().port + '/api/v1/jobs', {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
+    const response = await fetch(base + '/api/v1/jobs', {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
+      headers: {
+        'Content-Type': 'text/plain',
+        ...account.headers
+      },
       body: JSON.stringify(validJob())
     });
     const body = await response.json();
@@ -216,9 +481,14 @@ test('write requests require an application/json content type', async () => {
 test('request bodies larger than 1 MB return 413', async () => {
   const server = await startTestServer();
   try {
-    const response = await fetch('http://127.0.0.1:' + server.address().port + '/api/v1/jobs', {
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
+    const response = await fetch(base + '/api/v1/jobs', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...account.headers
+      },
       body: 'x'.repeat(1024 * 1024 + 1)
     });
     const body = await response.json();
@@ -234,14 +504,17 @@ test('job status transitions follow the supported lifecycle', async () => {
   const server = await startTestServer();
   try {
     const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
     const created = await request(base, '/api/v1/jobs', {
       method: 'POST',
+      headers: account.headers,
       body: JSON.stringify(validJob())
     });
     const id = created.body.data.id;
 
     const skip = await request(base, '/api/v1/jobs/' + id, {
       method: 'PATCH',
+      headers: account.headers,
       body: JSON.stringify({ status: 'completed' })
     });
     assert.equal(skip.status, 409);
@@ -249,18 +522,21 @@ test('job status transitions follow the supported lifecycle', async () => {
 
     const accepted = await request(base, '/api/v1/jobs/' + id, {
       method: 'PATCH',
+      headers: account.headers,
       body: JSON.stringify({ status: 'accepted' })
     });
     assert.equal(accepted.status, 200);
 
     const completed = await request(base, '/api/v1/jobs/' + id, {
       method: 'PATCH',
+      headers: account.headers,
       body: JSON.stringify({ status: 'completed' })
     });
     assert.equal(completed.status, 200);
 
     const reopen = await request(base, '/api/v1/jobs/' + id, {
       method: 'PATCH',
+      headers: account.headers,
       body: JSON.stringify({ status: 'pending' })
     });
     assert.equal(reopen.status, 409);
@@ -273,18 +549,22 @@ test('empty patches and unknown patch fields are rejected', async () => {
   const server = await startTestServer();
   try {
     const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
     const created = await request(base, '/api/v1/jobs', {
       method: 'POST',
+      headers: account.headers,
       body: JSON.stringify(validJob())
     });
     const id = created.body.data.id;
 
     const empty = await request(base, '/api/v1/jobs/' + id, {
       method: 'PATCH',
+      headers: account.headers,
       body: JSON.stringify({})
     });
     const unknown = await request(base, '/api/v1/jobs/' + id, {
       method: 'PATCH',
+      headers: account.headers,
       body: JSON.stringify({ businessId: 'another-business' })
     });
 
@@ -299,7 +579,9 @@ test('empty patches and unknown patch fields are rejected', async () => {
 test('invalid status filters return 400', async () => {
   const server = await startTestServer();
   try {
-    const response = await request('http://127.0.0.1:' + server.address().port, '/api/v1/jobs?status=unknown');
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const account = await registerBusiness(base);
+    const response = await request(base, '/api/v1/jobs?status=unknown', { headers: account.headers });
 
     assert.equal(response.status, 400);
     assert.equal(response.body.error.code, 'INVALID_QUERY');
