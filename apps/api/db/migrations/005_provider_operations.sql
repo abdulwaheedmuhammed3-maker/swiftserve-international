@@ -109,8 +109,8 @@ CREATE TABLE IF NOT EXISTS booking_assignments (
   assigned_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'offered'
     CHECK (status IN ('offered', 'accepted', 'declined', 'cancelled', 'in_progress', 'completed')),
-  offered_start_at TIMESTAMPTZ,
-  offered_end_at TIMESTAMPTZ,
+  offered_start_at TIMESTAMPTZ NOT NULL,
+  offered_end_at TIMESTAMPTZ NOT NULL,
   assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   responded_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
@@ -120,10 +120,7 @@ CREATE TABLE IF NOT EXISTS booking_assignments (
   CONSTRAINT booking_assignments_booking_scope_fk
     FOREIGN KEY (business_id, booking_id)
     REFERENCES bookings (business_id, id) ON DELETE CASCADE,
-  CONSTRAINT booking_assignments_window_check CHECK (
-    offered_end_at IS NULL OR
-    (offered_start_at IS NOT NULL AND offered_end_at > offered_start_at)
-  ),
+  CONSTRAINT booking_assignments_window_check CHECK (offered_end_at > offered_start_at),
   UNIQUE (business_id, id)
 );
 
