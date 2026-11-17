@@ -71,6 +71,7 @@ function validateObject(body, allowedKeys) {
 }
 
 function validateProfile(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return ['Request body must be a JSON object.'];
   const allowed = ['name','description','businessEmail','phoneE164','website','countryCode','currencyCode','timeZone'];
   const errors = validateObject(body, allowed);
   if (!errors.length && Object.keys(body).length === 0) errors.push('At least one field is required.');
@@ -94,6 +95,7 @@ function validateProfile(body) {
 }
 
 function validateService(body, partial = false) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return ['Request body must be a JSON object.'];
   const allowed = ['category','name','slug','description','pricingModel','currencyCode','priceMinor','durationMinutes','isActive'];
   const errors = validateObject(body, allowed);
   if (!partial || 'category' in body) if (typeof body.category !== 'string' || !SERVICES.has(body.category)) errors.push('category is not a supported service category.');
@@ -115,6 +117,7 @@ function validateService(body, partial = false) {
 }
 
 function validateBranch(body, partial = false) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return ['Request body must be a JSON object.'];
   const allowed = ['name','countryCode','addressLine1','addressLine2','city','region','postalCode','phoneE164','timeZone','isPrimary','status'];
   const errors = validateObject(body, allowed);
   const required = ['name','countryCode','addressLine1','city'];
@@ -130,6 +133,7 @@ function validateBranch(body, partial = false) {
 }
 
 function validateArea(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return ['Request body must be a JSON object.'];
   const errors = validateObject(body, ['branchId','countryCode','region','city','postalCodePrefix']);
   if (!/^[A-Za-z]{2}$/.test(body.countryCode || '')) errors.push('countryCode must be a two-letter code.');
   if (![body.region,body.city,body.postalCodePrefix].some(value => typeof value === 'string' && value.trim().length)) errors.push('Provide at least one of region, city or postalCodePrefix.');
@@ -138,6 +142,7 @@ function validateArea(body) {
 }
 
 function validateHours(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return ['Request body must be a JSON object.'];
   const errors = validateObject(body, ['branchId','dayOfWeek','opensAt','closesAt','isClosed']);
   if (!Number.isInteger(body.dayOfWeek) || body.dayOfWeek < 0 || body.dayOfWeek > 6) errors.push('dayOfWeek must be an integer from 0 (Sunday) to 6 (Saturday).');
   if (typeof body.isClosed !== 'boolean') errors.push('isClosed must be boolean.');
@@ -310,6 +315,7 @@ export async function handleBusinessApi(req, url, businessId, user, membership) 
         if (!canManage) return fail(403,'INSUFFICIENT_ROLE','Your role cannot manage service areas.');
         const body=await bodyJson(req);
         const errors=validateObject(body,['countryCode','region','city','postalCodePrefix','isActive']);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(422,'VALIDATION_ERROR','Service-area update validation failed.',errors);
         if (!('countryCode' in body || 'region' in body || 'city' in body || 'postalCodePrefix' in body || 'isActive' in body)) errors.push('At least one field is required.');
         if ('countryCode' in body && !/^[A-Za-z]{2}$/.test(body.countryCode)) errors.push('countryCode must be a two-letter code.');
         if ('isActive' in body && typeof body.isActive!=='boolean') errors.push('isActive must be boolean.');
@@ -339,6 +345,7 @@ export async function handleBusinessApi(req, url, businessId, user, membership) 
       if (method==='PATCH') {
         const body=await bodyJson(req);
         const errors=validateObject(body,['role']);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(422,'VALIDATION_ERROR','Team role validation failed.',errors);
         if (!ROLES.has(body.role)) errors.push('role must be admin, manager or staff.');
         if (errors.length) return fail(422,'VALIDATION_ERROR','Team role validation failed.',errors);
         const updated=await updateBusinessMemberRole(businessId,userId,body.role);
@@ -359,6 +366,7 @@ export async function handleBusinessApi(req, url, businessId, user, membership) 
         if (!canAdmin) return fail(403,'INSUFFICIENT_ROLE','Only owners and administrators can invite team members.');
         const body=await bodyJson(req);
         const errors=validateObject(body,['email','role']);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return fail(422,'VALIDATION_ERROR','Invitation validation failed.',errors);
         if (typeof body.email!=='string' || body.email.length>254 || !EMAIL.test(body.email.trim())) errors.push('email must be valid.');
         if (!ROLES.has(body.role)) errors.push('role must be admin, manager or staff.');
         if (errors.length) return fail(422,'VALIDATION_ERROR','Invitation validation failed.',errors);
