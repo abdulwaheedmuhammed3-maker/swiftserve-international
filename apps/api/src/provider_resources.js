@@ -384,7 +384,13 @@ export async function listProviderAssignments(providerUserId,status=null) {
     [providerUserId,status]
   );
   if(result)return result.rows.map(mapAssignmentRow);
-  return [...assignments.values()].filter(item=>item.providerUserId===providerUserId&&(!status||item.status===status)).sort((a,b)=>b.assignedAt.localeCompare(a.assignedAt)).map(item=>({...item,booking:null}));
+  const list=[...assignments.values()].filter(item=>item.providerUserId===providerUserId&&(!status||item.status===status)).sort((a,b)=>b.assignedAt.localeCompare(a.assignedAt));
+  const output=[];
+  for(const item of list){
+    const booking=await getBusinessBooking(item.businessId,item.bookingId);
+    output.push({...item,booking});
+  }
+  return output;
 }
 
 export async function getProviderAssignment(providerUserId,assignmentId) {
@@ -394,7 +400,9 @@ export async function getProviderAssignment(providerUserId,assignmentId) {
   );
   if(result)return result.rows[0]?mapAssignmentRow(result.rows[0]):null;
   const item=assignments.get(assignmentId);
-  return item&&item.providerUserId===providerUserId?{...item}:null;
+  if(!item||item.providerUserId!==providerUserId)return null;
+  const booking=await getBusinessBooking(item.businessId,item.bookingId);
+  return {...item,booking};
 }
 
 export async function respondToProviderAssignment(providerUserId,assignmentId,action,note=null) {
@@ -455,6 +463,57 @@ export async function respondToProviderAssignment(providerUserId,assignmentId,ac
   if(action==='in_progress'||action==='completed')pushNotification(booking.customerUserId,'booking_status','Booking update',action==='completed'?'Your service has been completed.':'Your provider has started work.',booking.id);
   else for(const member of await listBusinessMembers(assignment.businessId))pushNotification(member.userId,'provider_assignment_response','Provider assignment update','The provider has '+action+' the assignment.',booking.id);
   return {assignment,bookingStatus:nextBooking};
+}
+
+export async function cancelBusinessAssignment(businessId,bookingId,assignmentId,actorUserId,note=null) {
+  const result=await withDatabaseTransaction(async client=>{
+    const selected=await client.query(
+      'SELECT a.*,b.status AS booking_status,b.current_assignment_id FROM booking_assignments a JOIN bookings b ON b.id=a.booking_id AND b.business_id=a.business_id WHERE a.id=$1 AND a.business_id=$2 AND a.booking_id=$3 FOR UPDATE OF a,b',
+      [assignmentId,businessId,bookingId]
+    );
+    const row=selected.rows[0];
+    if(!row)return {error:'ASSIGNMENT_NOT_FOUND'};
+    if(!['offered','accepted'].includes(row.status)||row.current_assignment_id!==assignmentId)return {error:'ASSIGNMENT_NOT_CANCELLABLE'};
+    const updated=await client.query(
+      "UPDATE booking_assignments SET status='cancelled',note=COALESCE($2,note),updated_at=now() WHERE id=$1 RETURNING *",
+      [assignmentId,note]
+    );
+    await client.query(
+      "UPDATE bookings SET status='confirmed',current_assignment_id=NULL,updated_at=now() WHERE business_id=$1 AND id=$2",
+      [businessId,bookingId]
+    );
+    await client.query(
+      "INSERT INTO booking_status_events (business_id,booking_id,from_status,to_status,actor_user_id,note) VALUES ($1,$2,'assigned','confirmed',$3,$4)",
+      [businessId,bookingId,actorUserId,note||'Business cancelled provider assignment.']
+    );
+    await client.query(
+      "INSERT INTO booking_assignment_events (business_id,booking_id,assignment_id,provider_user_id,from_status,to_status,actor_user_id,note) VALUES ($1,$2,$3,$4,$5,'cancelled',$6,$7)",
+      [businessId,bookingId,assignmentId,row.provider_user_id,row.status,actorUserId,note]
+    );
+    await client.query(
+      "INSERT INTO notifications (user_id,notification_type,title,body,resource_type,resource_id) VALUES ($1,'provider_assignment_cancelled','Assignment cancelled','The business has cancelled your booking assignment.','booking',$2)",
+      [row.provider_user_id,bookingId]
+    );
+    return {assignment:updated.rows[0]};
+  });
+  if(result)return result.error?result:mapAssignment(result.assignment);
+
+  const assignment=assignments.get(assignmentId);
+  if(!assignment||assignment.businessId!==businessId||assignment.bookingId!==bookingId)return {error:'ASSIGNMENT_NOT_FOUND'};
+  if(!['offered','accepted'].includes(assignment.status))return {error:'ASSIGNMENT_NOT_CANCELLABLE'};
+  const booking=await getBusinessBooking(businessId,bookingId);
+  if(!booking||booking.currentAssignmentId!==assignmentId)return {error:'ASSIGNMENT_NOT_CANCELLABLE'};
+  const previous=assignment.status;
+  assignment.status='cancelled';
+  assignment.note=note||assignment.note;
+  assignment.updatedAt=new Date().toISOString();
+  assignments.set(assignmentId,assignment);
+  await updateBusinessBookingStatus(businessId,bookingId,actorUserId,'confirmed',note||'Business cancelled provider assignment.');
+  const refreshed=await getBusinessBooking(businessId,bookingId);
+  if(refreshed)refreshed.currentAssignmentId=null;
+  addAssignmentEvent(assignment,previous,'cancelled',actorUserId,note);
+  pushNotification(assignment.providerUserId,'provider_assignment_cancelled','Assignment cancelled','The business has cancelled your booking assignment.',bookingId);
+  return assignment;
 }
 
 export async function listBusinessAssignments(businessId,bookingId) {
