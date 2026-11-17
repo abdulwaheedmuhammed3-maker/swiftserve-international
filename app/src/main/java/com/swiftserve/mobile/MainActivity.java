@@ -6,6 +6,9 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.text.InputType;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
+import android.util.Base64;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -35,6 +38,7 @@ public final class MainActivity extends Activity {
     private static final String PREFS = "swiftserve";
     private static final String JOBS_KEY = "local_jobs";
     private static final String API_KEY = "api_url";
+    private static final String KEY_ALIAS = "swiftserve_session_key";
     private static final int INK = Color.rgb(20, 44, 39);
     private static final int GREEN = Color.rgb(22, 111, 83);
     private static final int MUTED = Color.rgb(102, 117, 112);
@@ -162,7 +166,7 @@ public final class MainActivity extends Activity {
 
     private void updateConnection() {
         String base = getPreferences(0).getString(API_KEY, "");
-        String token = getPreferences(0).getString("access_token", "");
+        String token = getAccessToken();
         String businessName = getPreferences(0).getString("business_name", "");
         if (base.isEmpty()) {
             connectionStatus.setText("On-device mode · requests stay on this phone");
@@ -219,11 +223,16 @@ public final class MainActivity extends Activity {
                 return;
             }
 
-            getPreferences(0).edit()
-                    .putString("access_token", data.optString("accessToken"))
-                    .putString("business_id", firstBusiness.optString("id"))
-                    .putString("business_name", firstBusiness.optString("name"))
-                    .apply();
+            try {
+                saveSession(
+                        data.optString("accessToken"),
+                        firstBusiness.optString("id"),
+                        firstBusiness.optString("name")
+                );
+            } catch (Exception error) {
+                toast("Could not securely save the sign-in session on this device.");
+                return;
+            }
             passwordInput.setText("");
             updateConnection();
             loadJobs();
@@ -232,7 +241,7 @@ public final class MainActivity extends Activity {
     }
 
     private void signOut() {
-        String token = getPreferences(0).getString("access_token", "");
+        String token = getAccessToken();
         if (token.isEmpty()) {
             clearLocalSession();
             toast("Signed out on this device.");
@@ -248,7 +257,8 @@ public final class MainActivity extends Activity {
 
     private void clearLocalSession() {
         getPreferences(0).edit()
-                .remove("access_token")
+                .remove("encrypted_access_token")
+                .remove("access_token_iv")
                 .remove("business_id")
                 .remove("business_name")
                 .apply();
@@ -256,7 +266,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean hasBusinessSession() {
-        return !getPreferences(0).getString("access_token", "").isEmpty()
+        return !getAccessToken().isEmpty()
                 && !getPreferences(0).getString("business_id", "").isEmpty();
     }
 
@@ -453,7 +463,7 @@ public final class MainActivity extends Activity {
         conn.setConnectTimeout(10000);
         conn.setReadTimeout(10000);
         conn.setRequestProperty("Accept", "application/json");
-        String accessToken = getPreferences(0).getString("access_token", "");
+        String accessToken = getAccessToken();
         String businessId = getPreferences(0).getString("business_id", "");
         if (!accessToken.isEmpty()) {
             conn.setRequestProperty("Authorization", "Bearer " + accessToken);
@@ -483,6 +493,63 @@ public final class MainActivity extends Activity {
         }
         conn.disconnect();
         return response.length() == 0 ? new JSONObject() : new JSONObject(response.toString());
+    }
+
+
+    private void saveSession(String token, String businessId, String businessName) throws Exception {
+        java.security.KeyStore keyStore = java.security.KeyStore.getInstance("AndroidKeyStore");
+        keyStore.load(null);
+        if (!keyStore.containsAlias(KEY_ALIAS)) {
+            javax.crypto.KeyGenerator generator = javax.crypto.KeyGenerator.getInstance(
+                    KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+            generator.init(new KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setRandomizedEncryptionRequired(true)
+                    .build());
+            generator.generateKey();
+        }
+
+        javax.crypto.SecretKey secretKey = (javax.crypto.SecretKey) keyStore.getKey(KEY_ALIAS, null);
+        javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, secretKey);
+        byte[] encrypted = cipher.doFinal(token.getBytes(StandardCharsets.UTF_8));
+
+        getPreferences(0).edit()
+                .putString("encrypted_access_token", Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                .putString("access_token_iv", Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP))
+                .putString("business_id", businessId)
+                .putString("business_name", businessName)
+                .apply();
+    }
+
+    private String getAccessToken() {
+        String encryptedValue = getPreferences(0).getString("encrypted_access_token", "");
+        String ivValue = getPreferences(0).getString("access_token_iv", "");
+        if (encryptedValue.isEmpty() || ivValue.isEmpty()) return "";
+
+        try {
+            java.security.KeyStore keyStore = java.security.KeyStore.getInstance("AndroidKeyStore");
+            keyStore.load(null);
+            if (!keyStore.containsAlias(KEY_ALIAS)) return "";
+
+            javax.crypto.SecretKey secretKey = (javax.crypto.SecretKey) keyStore.getKey(KEY_ALIAS, null);
+            byte[] encrypted = Base64.decode(encryptedValue, Base64.NO_WRAP);
+            byte[] iv = Base64.decode(ivValue, Base64.NO_WRAP);
+            javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, new javax.crypto.spec.GCMParameterSpec(128, iv));
+            return new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
+        } catch (Exception error) {
+            getPreferences(0).edit()
+                    .remove("encrypted_access_token")
+                    .remove("access_token_iv")
+                    .remove("business_id")
+                    .remove("business_name")
+                    .apply();
+            return "";
+        }
     }
 
     private EditText input(String hint, boolean singleLine) {
