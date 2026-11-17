@@ -12,6 +12,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
   process.env.DATABASE_URL = testDatabaseUrl;
 
   const { requestHandler } = await import('../src/app.js');
+  const { closeDatabase } = await import('../src/repository.js');
   const pool = new pg.Pool({ connectionString: testDatabaseUrl, max: 2 });
   const server = http.createServer(requestHandler);
   const userIds = [];
@@ -124,6 +125,7 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     );
     assert.equal(persisted.rows[0].count, 1);
   } finally {
+    server.closeAllConnections?.();
     await new Promise(resolve => server.close(resolve));
     if (businessIds.length) {
       await pool.query('DELETE FROM service_requests WHERE business_id = ANY($1::uuid[])', [businessIds]);
@@ -133,5 +135,6 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
       await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [userIds]);
     }
     await pool.end();
+    await closeDatabase();
   }
 });
