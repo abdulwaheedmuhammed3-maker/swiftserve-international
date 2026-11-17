@@ -121,14 +121,28 @@ function validateBranch(body, partial = false) {
   const allowed = ['name','countryCode','addressLine1','addressLine2','city','region','postalCode','phoneE164','timeZone','isPrimary','status'];
   const errors = validateObject(body, allowed);
   const required = ['name','countryCode','addressLine1','city'];
-  for (const key of required) if ((!partial || key in body) && (typeof body[key] !== 'string' || body[key].trim().length < (key === 'countryCode' ? 2 : 2))) errors.push(key + ' is required.');
+  for (const key of required) {
+    const minimum = key === 'addressLine1' ? 3 : 2;
+    if ((!partial || key in body) &&
+        (typeof body[key] !== 'string' || body[key].trim().length < minimum)) {
+      errors.push(key + ' is required and must contain at least ' + minimum + ' characters.');
+    }
+  }
   if ('name' in body && typeof body.name === 'string' && body.name.trim().length > 100) errors.push('name must not exceed 100 characters.');
-  if ('countryCode' in body && !/^[A-Za-z]{2}$/.test(body.countryCode)) errors.push('countryCode must be a two-letter code.');
+  if ('countryCode' in body && (typeof body.countryCode !== 'string' || !/^[A-Za-z]{2}$/.test(body.countryCode))) errors.push('countryCode must be a two-letter code.');
   if ('addressLine1' in body && typeof body.addressLine1 === 'string' && body.addressLine1.trim().length > 160) errors.push('addressLine1 must not exceed 160 characters.');
+  if ('addressLine2' in body && body.addressLine2 !== null && (typeof body.addressLine2 !== 'string' || body.addressLine2.length > 160)) errors.push('addressLine2 must not exceed 160 characters.');
   if ('city' in body && typeof body.city === 'string' && body.city.trim().length > 100) errors.push('city must not exceed 100 characters.');
-  if ('phoneE164' in body && body.phoneE164 !== null && !/^\+[1-9]\d{7,14}$/.test(body.phoneE164)) errors.push('phoneE164 must use E.164 format.');
+  if ('region' in body && body.region !== null && (typeof body.region !== 'string' || body.region.length > 100)) errors.push('region must not exceed 100 characters.');
+  if ('postalCode' in body && body.postalCode !== null && (typeof body.postalCode !== 'string' || body.postalCode.length > 24)) errors.push('postalCode must not exceed 24 characters.');
+  if ('phoneE164' in body && body.phoneE164 !== null && (typeof body.phoneE164 !== 'string' || !/^\+[1-9]\d{7,14}$/.test(body.phoneE164))) errors.push('phoneE164 must use E.164 format.');
+  if ('timeZone' in body && body.timeZone !== null) {
+    try { new Intl.DateTimeFormat('en', { timeZone: body.timeZone }); }
+    catch { errors.push('timeZone must be a valid IANA time-zone identifier.'); }
+  }
   if ('isPrimary' in body && typeof body.isPrimary !== 'boolean') errors.push('isPrimary must be boolean.');
   if ('status' in body && !['active','inactive'].includes(body.status)) errors.push('status must be active or inactive.');
+  if (partial && Object.keys(body).length === 0) errors.push('At least one field is required.');
   return errors;
 }
 
@@ -138,6 +152,9 @@ function validateArea(body) {
   if (!/^[A-Za-z]{2}$/.test(body.countryCode || '')) errors.push('countryCode must be a two-letter code.');
   if (![body.region,body.city,body.postalCodePrefix].some(value => typeof value === 'string' && value.trim().length)) errors.push('Provide at least one of region, city or postalCodePrefix.');
   if (body.branchId !== undefined && body.branchId !== null && (typeof body.branchId !== 'string' || !UUID.test(body.branchId))) errors.push('branchId must be a valid UUID.');
+  if (body.region !== undefined && body.region !== null && (typeof body.region !== 'string' || body.region.length > 100)) errors.push('region must not exceed 100 characters.');
+  if (body.city !== undefined && body.city !== null && (typeof body.city !== 'string' || body.city.length > 100)) errors.push('city must not exceed 100 characters.');
+  if (body.postalCodePrefix !== undefined && body.postalCodePrefix !== null && (typeof body.postalCodePrefix !== 'string' || body.postalCodePrefix.length > 24)) errors.push('postalCodePrefix must not exceed 24 characters.');
   return errors;
 }
 
@@ -149,6 +166,8 @@ function validateHours(body) {
   if (body.isClosed === false) {
     if (!TIME.test(body.opensAt || '') || !TIME.test(body.closesAt || '')) errors.push('opensAt and closesAt must use 24-hour HH:MM format.');
     else if (body.opensAt >= body.closesAt) errors.push('closesAt must be later than opensAt; overnight schedules are not yet supported.');
+  } else if (body.isClosed === true && (body.opensAt != null || body.closesAt != null)) {
+    errors.push('Closed days must not include opensAt or closesAt.');
   }
   if (body.branchId !== undefined && body.branchId !== null && (typeof body.branchId !== 'string' || !UUID.test(body.branchId))) errors.push('branchId must be a valid UUID.');
   return errors;
