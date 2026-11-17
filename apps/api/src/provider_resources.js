@@ -272,4 +272,45 @@ export async function acceptProviderInvitation(token,user) {
   return {businessId:invite.businessId};
 }
 
+export async function getProviderAssignmentReadiness(providerUserId,businessId,category,address) {
+  const result=await queryDatabase(
+    "SELECT p.time_zone,p.verification_status,p.onboarding_status,bp.id AS membership_id " +
+    "FROM provider_profiles p JOIN business_provider_memberships bp ON bp.provider_user_id=p.user_id " +
+    "WHERE p.user_id=$1 AND bp.business_id=$2 AND bp.status='active' LIMIT 1",
+    [providerUserId,businessId]
+  );
+  if(result){
+    const provider=result.rows[0];
+    if(!provider)return {error:'This provider is not an active member of this business.'};
+    if(provider.verification_status!=='verified'||provider.onboarding_status!=='active')
+      return {error:'Only verified and active providers can receive assignments.'};
+    const skill=await queryDatabase(
+      'SELECT 1 FROM provider_skills WHERE provider_user_id=$1 AND category=$2 AND is_active=true LIMIT 1',
+      [providerUserId,category]
+    );
+    if(!skill.rows[0])return {error:'The provider does not list the required service skill.'};
+    const area=await queryDatabase(
+      "SELECT 1 FROM provider_service_areas WHERE provider_user_id=$1 AND is_active=true AND country_code=$2 AND (city IS NULL OR lower(city)=lower($3)) AND (region IS NULL OR lower(region)=lower(coalesce($4,''))) AND (postal_code_prefix IS NULL OR left(lower(coalesce($5,'')),length(postal_code_prefix))=lower(postal_code_prefix)) LIMIT 1",
+      [providerUserId,address.countryCode,address.city,address.region,address.postalCode]
+    );
+    if(!area.rows[0])return {error:'The provider does not cover the booking address.'};
+    const schedule=await queryDatabase(
+      "SELECT day_of_week,opens_at,closes_at FROM provider_availability WHERE provider_user_id=$1 AND is_available=true ORDER BY day_of_week",
+      [providerUserId]
+    );
+    return {timeZone:provider.time_zone,membershipId:provider.membership_id,availability:schedule.rows};
+  }
+
+  const profile=profiles.get(providerUserId);
+  const member=businessProviders.get(businessId+':'+providerUserId);
+  if(!profile||!member||member.status!=='active')return {error:'This provider is not an active member of this business.'};
+  if(profile.verificationStatus!=='verified'||profile.onboardingStatus!=='active')
+    return {error:'Only verified and active providers can receive assignments.'};
+  if(!(skills.get(providerUserId)||[]).some(item=>item.category===category&&item.isActive!==false))
+    return {error:'The provider does not list the required service skill.'};
+  if(![...areas.values()].some(item=>item.providerUserId===providerUserId&&areaMatches(address,item)))
+    return {error:'The provider does not cover the booking address.'};
+  return {timeZone:profile.timeZone||'UTC',membershipId:null,availability:availability.get(providerUserId)||[]};
+}
+
 export function isProviderCategory(category){return categories.has(category);}
