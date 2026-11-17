@@ -9,7 +9,8 @@
     "start": "node src/server.js",
     "test": "node --test test/api.test.js",
     "migrate": "node src/migrate.js",
-    "test:integration": "node --test test/postgres.integration.test.js"
+    "test:integration": "node --test test/postgres.integration.test.js",
+    "platform-admin:add": "node src/grant-platform-admin.js"
   },
   "engines": {
     "node": ">=20"
