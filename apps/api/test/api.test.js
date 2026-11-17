@@ -958,6 +958,7 @@ test('customers can discover services, request bookings, receive quotes and foll
     assert.equal(booking.body.data.status,'requested');
     assert.equal(booking.body.data.businessId,owner.businessId);
     assert.equal(booking.body.data.customerLocationId,saved.body.data.id);
+    assert.equal(booking.body.data.servicePriceMinor,150000);
 
     const businessList=await request(base,'/api/v1/business/bookings',{
       headers:owner.headers
