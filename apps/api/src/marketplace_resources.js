@@ -68,6 +68,10 @@ function pushMemoryNotification(userId,type,title,body,resourceId) {
   });
 }
 
+export function createMemoryNotification(userId,type,title,body,resourceId) {
+  pushMemoryNotification(userId,type,title,body,resourceId);
+}
+
 function areaMatches(item, countryCode, city) {
   if (countryCode && item.countryCode!==countryCode) return false;
   if (city) {
