@@ -193,6 +193,7 @@ export async function markPaymentSucceeded(reference,providerData,eventKey,event
   });
   if(result){
     if(result.missing||result.mismatch)return result;
+    if(result.changed)await createOrRefreshPayoutForCompletedAssignment(result.payment.bookingId);
     return result;
   }
   const item=[...payments.values()].find(payment=>payment.reference===reference);
@@ -557,7 +558,8 @@ export async function createDispute(input){
   if(!input.booking||input.booking.status==='requested'||input.booking.status==='quoted')return {error:'A dispute cannot be opened for this booking status.'};
   if([...disputes.values()].some(item=>item.bookingId===input.bookingId))return {error:'A dispute already exists for this booking.'};
   const item={id:input.id,businessId:input.businessId,bookingId:input.bookingId,
-    openedByUserId:input.userId,openedByRole:input.role,category:input.category,
+    openedByUserId:input.userId,customerUserId:input.booking?.customerUserId??null,
+    openedByRole:input.role,category:input.category,
     description:input.description,requestedResolution:input.requestedResolution,
     status:'open',resolution:null,resolutionNote:null,createdAt:new Date().toISOString()};
   disputes.set(item.id,item);
@@ -608,7 +610,7 @@ export async function getCustomerDisputeById(userId,id){
   );
   if(result)return result.rows[0]?mapDispute(result.rows[0]):null;
   const item=disputes.get(id);
-  if(!item)return null;
+  if(!item||item.customerUserId!==userId)return null;
   return item;
 }
 
@@ -652,7 +654,7 @@ export async function addDisputeMessage(input){
   };
   const dispute=disputes.get(input.disputeId);
   if(!dispute||dispute.businessId!==input.businessId||['resolved','rejected'].includes(dispute.status))return null;
-  if(input.role==='customer'&&dispute.openedByUserId!==input.userId)return null;
+  if(input.role==='customer'&&dispute.customerUserId!==input.userId)return null;
   const message={id:randomUUID(),authorUserId:input.userId,authorRole:input.role,message:input.message,createdAt:new Date().toISOString()};
   const list=disputeMessages.get(dispute.id)||[];list.push(message);disputeMessages.set(dispute.id,list);
   if(dispute.status==='open'&&input.role==='business')dispute.status='in_review';
