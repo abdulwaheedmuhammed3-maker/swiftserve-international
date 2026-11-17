@@ -8,6 +8,7 @@ const payouts=new Map();
 const reviews=new Map();
 const disputes=new Map();
 const disputeMessages=new Map();
+const webhookEvents=new Map();
 
 function mapPayment(row){
   return {
@@ -351,7 +352,7 @@ export async function getProviderPayoutAccount(userId){
   return safe;
 }
 
-export async function createOrRefreshPayoutForCompletedAssignment(bookingId){
+export async function createOrRefreshPayoutForCompletedAssignment(bookingId,memoryAssignment=null){
   const feeBps=Math.max(0,Math.min(5000,Number(process.env.SWIFTSERVE_PLATFORM_FEE_BPS||0)));
   const result=await withDatabaseTransaction(async client=>{
     const selected=await client.query(
@@ -397,7 +398,7 @@ export async function createOrRefreshPayoutForCompletedAssignment(bookingId){
   });
   if(result!==null)return result;
 
-  const assignment=arguments[1];
+  const assignment=memoryAssignment;
   if(!assignment)return null;
   const current=[...payouts.values()].find(item=>item.bookingAssignmentId===assignment.id);
   if(current&&['processing','paid','on_hold'].includes(current.status))return current;
@@ -560,13 +561,49 @@ export async function createDispute(input){
   return {dispute:item};
 }
 
+export async function getBookingFinancialSummary(businessId,bookingId){
+  const result=await queryDatabase(
+    'SELECT id,business_id,booking_id,provider_reference,amount_minor,currency_code,status,paid_at,created_at FROM payment_intents WHERE business_id=$1 AND booking_id=$2 ORDER BY created_at DESC',
+    [businessId,bookingId]
+  );
+  if(result)return result.rows.map(row=>({
+    id:row.id,businessId:row.business_id,bookingId:row.booking_id,
+    reference:row.provider_reference,amountMinor:Number(row.amount_minor),
+    currencyCode:row.currency_code,status:row.status,
+    paidAt:row.paid_at?new Date(row.paid_at).toISOString():null,
+    createdAt:new Date(row.created_at).toISOString()
+  }));
+  return [...payments.values()].filter(item=>item.businessId===businessId&&item.bookingId===bookingId);
+}
+
+export async function listBusinessDisputes(businessId){
+  const result=await queryDatabase(
+    'SELECT d.*,b.public_reference FROM disputes d JOIN bookings b ON b.id=d.booking_id AND b.business_id=d.business_id WHERE d.business_id=$1 ORDER BY d.created_at DESC LIMIT 100',
+    [businessId]
+  );
+  if(result)return result.rows.map(mapDispute);
+  return [...disputes.values()].filter(item=>item.businessId===businessId);
+}
+
+export async function recordProviderWebhookEvent(provider,eventKey,eventType,payloadHash){
+  const result=await queryDatabase(
+    'INSERT INTO provider_webhook_events (provider,event_key,event_type,payload_hash) VALUES ($1,$2,$3,$4) ON CONFLICT (provider,event_key) DO NOTHING RETURNING event_key',
+    [provider,eventKey,eventType,payloadHash]
+  );
+  if(result)return result.rowCount>0;
+  const key=provider+':'+eventKey;
+  if(webhookEvents.has(key))return false;
+  webhookEvents.set(key,{provider,eventKey,eventType,payloadHash});
+  return true;
+}
+
 export async function getCustomerDispute(userId,bookingId){
   const result=await queryDatabase(
     'SELECT d.* FROM disputes d JOIN bookings b ON b.id=d.booking_id AND b.business_id=d.business_id WHERE b.customer_user_id=$1 AND d.booking_id=$2',
     [userId,bookingId]
   );
   if(result)return result.rows[0]?mapDispute(result.rows[0]):null;
-  return [...disputes.values()].find(item=>item.bookingId===bookingId&&item.openedByRole==='customer')||null;
+  return [...disputes.values()].find(item=>item.bookingId===bookingId)||null;
 }
 
 export async function getBusinessDispute(businessId,bookingId){
