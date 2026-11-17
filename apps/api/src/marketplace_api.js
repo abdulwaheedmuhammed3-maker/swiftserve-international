@@ -328,7 +328,7 @@ async function businessBookingsApi(req,url,user,business){
     if(!validId(statusPath[1]))return fail(400,'INVALID_ID','Booking ID must be a valid UUID.');
     if(!canManage)return fail(403,'INSUFFICIENT_ROLE','Only owners, admins and managers can change booking status.');
     const body=await readJson(req);const errors=fields(body,['status','note']);
-    if(!isObject(body)||!['confirmed','declined','cancelled','in_progress','completed'].includes(body.status))errors.push('status is not supported.');
+    if(!isObject(body)||!['confirmed','declined','cancelled'].includes(body.status))errors.push('status must be confirmed, declined or cancelled; providers control work progress and completion.');
     if(body.note!==undefined&&body.note!==null&&(typeof body.note!=='string'||body.note.length>1000))errors.push('note must not exceed 1,000 characters.');
     if(errors.length)return fail(422,'VALIDATION_ERROR','Booking status validation failed.',errors);
     const saved=await updateBusinessBookingStatus(business.businessId,statusPath[1],user.id,body.status,body.note??null);

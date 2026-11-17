@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { handleBusinessApi } from './business_api.js';
 import { handleMarketplaceApi, handleNotificationApi } from './marketplace_api.js';
 import { acceptInvitation } from './business_resources.js';
+import { initializeProviderProfile } from './provider_resources.js';
+import { handleAdminProviderApi, handleProviderApi } from './provider_api.js';
 import {
   authenticateAccessToken,
   getAccountProfile,
@@ -158,8 +160,8 @@ function validateRegistration(body) {
   }
 
   const accountType = body.accountType ?? 'customer';
-  if (!['customer', 'business'].includes(accountType)) {
-    details.push('accountType must be customer or business.');
+  if (!['customer', 'business', 'provider'].includes(accountType)) {
+    details.push('accountType must be customer, business or provider.');
   }
 
   if (accountType === 'business' &&
@@ -168,8 +170,12 @@ function validateRegistration(body) {
        body.businessName.trim().length > 120)) {
     details.push('businessName must be between 2 and 120 characters for a business account.');
   }
-  if (accountType === 'customer' && body.businessName !== undefined) {
+  if (accountType !== 'business' && body.businessName !== undefined) {
     details.push('businessName can only be supplied for a business account.');
+  }
+  if (accountType === 'provider' &&
+      (typeof body.countryCode !== 'string' || !/^[A-Za-z]{2}$/.test(body.countryCode))) {
+    details.push('countryCode is required for a provider account.');
   }
   if (body.countryCode !== undefined &&
       (typeof body.countryCode !== 'string' || !/^[A-Za-z]{2}$/.test(body.countryCode))) {
@@ -344,6 +350,9 @@ export async function requestHandler(req, res) {
           businessName: typeof body.businessName === 'string' ? body.businessName.trim() : undefined,
           countryCode: typeof body.countryCode === 'string' ? body.countryCode.toUpperCase() : undefined
         });
+        if (data.user.accountType === 'provider') {
+          await initializeProviderProfile(data.user, body.countryCode.toUpperCase());
+        }
         return json(res, 201, { data });
       }
 
@@ -421,6 +430,37 @@ export async function requestHandler(req, res) {
     }
   }
 
+  if (url.pathname === '/api/v1/admin/providers/pending' ||
+      /^\/api\/v1\/admin\/providers\/[^/]+\/verification$/.test(url.pathname)) {
+    try {
+      const response = await handleAdminProviderApi(req, url);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('admin_provider_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/provider' || url.pathname.startsWith('/api/v1/provider/')) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const response = await handleProviderApi(req, url, authenticated.user);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('provider_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
   if (url.pathname === '/api/v1/market/services') {
     const response = await handleMarketplaceApi(req, url);
     return json(res, response.status, response.body);
@@ -454,6 +494,26 @@ export async function requestHandler(req, res) {
       return json(res, response.status, response.body);
     } catch (error) {
       logSafeError('notification_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  if (url.pathname === '/api/v1/business/providers' ||
+      url.pathname.startsWith('/api/v1/business/providers/') ||
+      /^\/api\/v1\/business\/bookings\/[^/]+\/assignments(?:\/[^/]+)?$/.test(url.pathname)) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      const business = await resolveBusinessContext(req, authenticated.user);
+      if (business.error) return json(res, business.status, business.error);
+      const response = await handleProviderApi(req, url, authenticated.user, business);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('business_provider_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
     }
   }

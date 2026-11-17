@@ -15,7 +15,7 @@ SwiftServe is being developed as an international household-services platform. T
 - [x] Verify GitHub Actions API tests and Android APK build on the stabilisation pull request.
 - [ ] Apply database migrations to the development database.
 - [x] Add a checksum-verified migration runner and PostgreSQL 16 integration tests in CI.
-- [ ] Apply migrations to the actual development database and verify data survives API restarts.
+- [ ] Apply migrations 001–005 to the actual development database and verify data survives API restarts.
 - [ ] Verify the deployed API configuration and readiness behaviour.
 
 **Exit condition:** the actual development database is migrated, automated checks pass, PostgreSQL persistence is verified, and deployment does not use volatile storage.
@@ -34,7 +34,7 @@ SwiftServe is being developed as an international household-services platform. T
 - [x] Add process-local throttling for registration and login attempts.
 - [x] Add tests for account lifecycle, authentication and cross-business access.
 - [x] Add PostgreSQL integration coverage for account persistence, session revocation and cross-business isolation in CI.
-- [ ] Apply migration 002 to the actual development database and verify the deployed service.
+- [ ] Apply migrations 002–005 to the actual development database and verify the deployed service.
 - [ ] Add email verification, password reset, account recovery and administrative session revocation.
 - [ ] Move rate limiting to a shared gateway/store before horizontal scaling.
 - [ ] Review security, privacy and session policies for the first pilot.
@@ -73,8 +73,16 @@ SwiftServe is being developed as an international household-services platform. T
 - [x] Add in-app notifications for booking and quote events.
 - [x] Add API regression and PostgreSQL integration coverage for the customer booking lifecycle.
 - [ ] Add booking rescheduling and slot-capacity/conflict checks.
-- [ ] Add provider onboarding, availability and assignment workflows.
+- [x] Add provider account registration and provider profile creation.
+- [x] Add provider profile, supported skills, service areas and weekly availability endpoints.
+- [x] Add provider onboarding submission and protected manual verification review.
+- [x] Add business-provider invitations and authenticated provider acceptance.
+- [x] Add provider assignment offers with skill, coverage, verification, availability and overlapping-schedule checks.
+- [x] Add provider accept/decline, in-progress and completion workflows with booking history and in-app notifications.
+- [x] Add API regression and PostgreSQL integration coverage for provider onboarding and assignment lifecycle.
+- [ ] Add provider identity-document upload, secure document storage and stronger operational KYC review.
 - [ ] Connect email, SMS and push notification delivery.
+- [ ] Add a complete slot-capacity/travel-buffer engine and booking rescheduling.
 - [ ] Build customer and provider mobile experiences with accessible, low-bandwidth UX.
 - [ ] Add end-to-end mobile workflow tests.
 
@@ -82,7 +90,8 @@ SwiftServe is being developed as an international household-services platform. T
 
 ## Stage 4 — Trust, payments and support
 
-- [ ] Add provider verification workflow and review controls.
+- [x] Add a protected manual provider verification review workflow.
+- [ ] Add provider identity evidence/document storage and stronger KYC review controls.
 - [ ] Integrate country-appropriate payment providers.
 - [ ] Add payment intents, transaction records, refunds and reconciliation.
 - [ ] Add reviews, ratings, reports and dispute handling.
