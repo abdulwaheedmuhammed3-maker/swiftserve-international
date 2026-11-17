@@ -280,7 +280,7 @@ export async function updateRefundStatus(reference,status,providerRefundId=null,
     const row=selected.rows[0];
     if(!row)return null;
     const updated=await client.query(
-      'UPDATE refunds SET status=$2,provider_refund_id=COALESCE($3,provider_refund_id),failure_reason=$4,processed_at=CASE WHEN $2=\\'processed\\' THEN COALESCE(processed_at,now()) ELSE processed_at END,updated_at=now() WHERE id=$1 RETURNING *',
+      "UPDATE refunds SET status=$2,provider_refund_id=COALESCE($3,provider_refund_id),failure_reason=$4,processed_at=CASE WHEN $2='processed' THEN COALESCE(processed_at,now()) ELSE processed_at END,updated_at=now() WHERE id=$1 RETURNING *",
       [row.id,status,providerRefundId,failureReason]
     );
     const totals=await client.query(
@@ -384,7 +384,7 @@ export async function createOrRefreshPayoutForCompletedAssignment(bookingId){
     const values=[row.business_id,row.booking_id,row.assignment_id,row.provider_user_id,row.payment_id,row.currency_code,gross,fee,net];
     if(payout){
       const updated=await client.query(
-        "UPDATE provider_payouts SET payment_intent_id=$5,currency_code=$6,gross_amount_minor=$7,platform_fee_minor=$8,net_amount_minor=$9,status='pending',updated_at=now() WHERE id=$1 RETURNING *",
+        "UPDATE provider_payouts SET payment_intent_id=$2,currency_code=$3,gross_amount_minor=$4,platform_fee_minor=$5,net_amount_minor=$6,status='pending',updated_at=now() WHERE id=$1 RETURNING *",
         [payout.id,...values.slice(4)]
       );
       return mapPayout(updated.rows[0]);
@@ -397,10 +397,24 @@ export async function createOrRefreshPayoutForCompletedAssignment(bookingId){
   });
   if(result!==null)return result;
 
-  const assignment=(await import('./provider_assignments.js')).__not_used;
-  const current=[...payouts.values()].find(item=>item.bookingId===bookingId);
+  const assignment=arguments[1];
+  if(!assignment)return null;
+  const current=[...payouts.values()].find(item=>item.bookingAssignmentId===assignment.id);
   if(current&&['processing','paid','on_hold'].includes(current.status))return current;
-  return current||null;
+  const payment=[...payments.values()].find(item=>item.bookingId===bookingId&&['succeeded','partially_refunded'].includes(item.status));
+  const refunded=[...refunds.values()].filter(item=>payment&&item.paymentIntentId===payment.id&&['pending','processing','processed'].includes(item.status)).reduce((sum,item)=>sum+item.amountMinor,0);
+  const gross=payment?Math.max(0,payment.amountMinor-refunded):0;
+  const fee=Math.floor((gross*feeBps)/10000);
+  const payout={
+    id:current?.id??randomUUID(),businessId:assignment.businessId,bookingId,
+    bookingAssignmentId:assignment.id,providerUserId:assignment.providerUserId,
+    paymentIntentId:payment?.id??null,currencyCode:assignment.currencyCode??payment?.currencyCode??'NGN',
+    grossAmountMinor:gross,platformFeeMinor:fee,netAmountMinor:gross-fee,
+    status:payment?'pending':'awaiting_payment',transferReference:null,
+    createdAt:current?.createdAt??new Date().toISOString()
+  };
+  payouts.set(payout.id,payout);
+  return payout;
 }
 
 export async function listAdminPayouts(status='pending'){
@@ -428,7 +442,7 @@ export async function updatePayoutTransfer(id,status,reference,providerTransferI
     const selected=await client.query('SELECT status FROM provider_payouts WHERE id=$1 FOR UPDATE',[id]);
     if(!selected.rows[0])return null;
     const updated=await client.query(
-      'UPDATE provider_payouts SET status=$2,transfer_reference=COALESCE($3,transfer_reference),provider_transfer_id=COALESCE($4,provider_transfer_id),failure_reason=$5,initiated_at=CASE WHEN $2 IN (\\'processing\\',\\'paid\\') THEN COALESCE(initiated_at,now()) ELSE initiated_at END,paid_at=CASE WHEN $2=\\'paid\\' THEN COALESCE(paid_at,now()) ELSE paid_at END,updated_at=now() WHERE id=$1 RETURNING *',
+      "UPDATE provider_payouts SET status=$2,transfer_reference=COALESCE($3,transfer_reference),provider_transfer_id=COALESCE($4,provider_transfer_id),failure_reason=$5,initiated_at=CASE WHEN $2 IN ('processing','paid') THEN COALESCE(initiated_at,now()) ELSE initiated_at END,paid_at=CASE WHEN $2='paid' THEN COALESCE(paid_at,now()) ELSE paid_at END,updated_at=now() WHERE id=$1 RETURNING *",
       [id,status,reference,providerTransferId,failureReason]
     );
     await client.query(
