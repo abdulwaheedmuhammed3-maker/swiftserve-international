@@ -169,11 +169,43 @@ export async function getCustomerProfile(user) {
 }
 
 export async function updateCustomerProfile(userId,patch) {
-  const columns={phoneE164:'phone_e164',preferredLanguage:'preferred_language',locale:'locale'};
-  const entries=Object.entries(patch).filter(([key])=>Object.prototype.hasOwnProperty.call(columns,key));
-  if (!entries.length) return getCustomerProfile({id:userId});
-  const insertColumns=['user_id',...entries.map(([key])=>columns[key])];
-  const placeholders=insertColumns.map((_,index)=>'
+  const columns = {
+    phoneE164: 'phone_e164',
+    preferredLanguage: 'preferred_language',
+    locale: 'locale'
+  };
+  const entries = Object.entries(patch).filter(([key]) =>
+    Object.prototype.hasOwnProperty.call(columns, key)
+  );
+  if (entries.length === 0) return getCustomerProfile({ id: userId });
+
+  const insertColumns = ['user_id', ...entries.map(([key]) => columns[key])];
+  const placeholders = entries.map((_, index) => '$' + (index + 2));
+  const updates = entries.map(([key]) => columns[key] + '=EXCLUDED.' + columns[key]);
+  const sql =
+    'INSERT INTO customer_profiles (' + insertColumns.join(',') + ') ' +
+    'VALUES ($1,' + placeholders.join(',') + ') ' +
+    'ON CONFLICT (user_id) DO UPDATE SET ' + updates.join(',') + ',updated_at=now() ' +
+    'RETURNING phone_e164,preferred_language,locale';
+  const result = await queryDatabase(sql, [userId, ...entries.map(([, value]) => value)]);
+
+  if (result) {
+    const row = result.rows[0];
+    return {
+      phoneE164: row.phone_e164,
+      preferredLanguage: row.preferred_language,
+      locale: row.locale
+    };
+  }
+
+  const updated = { ...(profiles.get(userId) || {}), ...patch };
+  profiles.set(userId, updated);
+  return {
+    phoneE164: updated.phoneE164 ?? null,
+    preferredLanguage: updated.preferredLanguage ?? 'en',
+    locale: updated.locale ?? 'en'
+  };
+}
 
 export async function listCustomerLocations(userId) {
   const result=await queryDatabase('SELECT * FROM customer_locations WHERE customer_user_id=$1 ORDER BY is_default DESC,created_at DESC',[userId]);
