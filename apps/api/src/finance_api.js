@@ -259,6 +259,8 @@ async function startBusinessRefund(req,url,user,business){
     merchantNote:body.merchantNote??null
   });
   if(created.error)return fail(409,'REFUND_NOT_AVAILABLE',created.error);
+  const completedAssignment=await getCompletedAssignmentForBooking(booking.id);
+  if(completedAssignment)await createOrRefreshPayoutForCompletedAssignment(booking.id,completedAssignment);
   const gateway=await paystackRequest('/refund',{
     transaction:created.payment.reference,
     amount:created.refund.amountMinor,
@@ -268,8 +270,11 @@ async function startBusinessRefund(req,url,user,business){
     merchant_note:created.refund.merchantNote||'SwiftServe refund request'
   });
   if(!gateway.ok){
+    if(gateway.networkError){
+      return fail(503,'REFUND_STATUS_UNCERTAIN','The refund request timed out or the payment provider could not be reached. The refund remains pending and is reserved against the refundable balance. Do not submit another refund until its status is reconciled.');
+    }
     await updateRefundStatus(reference,'failed',null,gateway.message||'Gateway refund request failed.');
-    return fail(gateway.networkError?503:502,'REFUND_INITIALIZATION_FAILED',gateway.message||'The refund request could not be submitted.');
+    return fail(502,'REFUND_INITIALIZATION_FAILED',gateway.message||'The refund request was rejected by the payment provider.');
   }
   const status=['pending','processing','processed','failed'].includes(gateway.data?.status)?gateway.data.status:'pending';
   const updated=await updateRefundStatus(reference,status,gateway.data?.id?String(gateway.data.id):null,null);
