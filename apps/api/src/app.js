@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { handleBusinessApi } from './business_api.js';
 import { handleMarketplaceApi, handleNotificationApi } from './marketplace_api.js';
+import { handleProviderApi } from './provider_api.js';
 import { acceptInvitation } from './business_resources.js';
 import {
   authenticateAccessToken,
@@ -454,6 +455,35 @@ export async function requestHandler(req, res) {
       return json(res, response.status, response.body);
     } catch (error) {
       logSafeError('notification_route_failed', error);
+      return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
+    }
+  }
+
+  const businessAssignmentRoute =
+    /^\/api\/v1\/business\/bookings\/[0-9a-f-]+\/assignments(?:\/.*)?$/i.test(url.pathname);
+  if (
+    url.pathname === '/api/v1/provider' ||
+    url.pathname.startsWith('/api/v1/provider/') ||
+    url.pathname === '/api/v1/admin/providers' ||
+    url.pathname.startsWith('/api/v1/admin/providers/') ||
+    businessAssignmentRoute
+  ) {
+    try {
+      const authenticated = await authenticateRequest(req);
+      if (!authenticated) return json(res, 401, errorResponse('UNAUTHENTICATED', 'A valid bearer access token is required.'));
+      let business = null;
+      if (businessAssignmentRoute) {
+        business = await resolveBusinessContext(req, authenticated.user);
+        if (business.error) return json(res, business.status, business.error);
+      }
+      const response = await handleProviderApi(req, url, authenticated.user, business);
+      if (response.noContent) {
+        res.statusCode = response.status;
+        return res.end();
+      }
+      return json(res, response.status, response.body);
+    } catch (error) {
+      logSafeError('provider_route_failed', error);
       return json(res, 500, errorResponse('INTERNAL_ERROR', 'An unexpected server error occurred.'));
     }
   }
