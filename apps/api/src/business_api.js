@@ -252,7 +252,9 @@ export async function handleBusinessApi(req, url, businessId, user, membership) 
       }
       if (method === 'DELETE') {
         if (!canAdmin) return fail(403,'INSUFFICIENT_ROLE','Only business owners and administrators can delete services.');
-        return await deleteService(businessId,id) ? result(204,undefined,true) : fail(404,'SERVICE_NOT_FOUND','Service not found.');
+        const deleted = await deleteService(businessId,id);
+        if (deleted || existing.isActive === false) return result(204,undefined,true);
+        return fail(404,'SERVICE_NOT_FOUND','Service not found.');
       }
       return fail(405,'METHOD_NOT_ALLOWED','Method not allowed for service.');
     }
