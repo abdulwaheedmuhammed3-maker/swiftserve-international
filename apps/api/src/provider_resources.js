@@ -21,6 +21,14 @@ function mapProfile(row) {
   };
 }
 
+function areaMatches(address,area) {
+  if(!area||area.isActive===false||area.countryCode!==address.countryCode)return false;
+  if(area.city&&area.city.toLowerCase()!==String(address.city||'').toLowerCase())return false;
+  if(area.region&&area.region.toLowerCase()!==String(address.region||'').toLowerCase())return false;
+  if(area.postalCodePrefix&&!String(address.postalCode||'').toLowerCase().startsWith(area.postalCodePrefix.toLowerCase()))return false;
+  return Boolean(area.city||area.region||area.postalCodePrefix);
+}
+
 function mapArea(row) {
   return {
     id: row.id, providerUserId: row.provider_user_id, countryCode: row.country_code,
