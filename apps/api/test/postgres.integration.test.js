@@ -412,6 +412,18 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     });
     assert.equal(refundWebhook.status,200);
     assert.equal(refundWebhook.body.received,true);
+    const duplicateRefundWebhook=await sendPaystackWebhook({
+      event:'refund.processed',
+      data:{
+        id:7654321,
+        reference:refund.body.data.reference,
+        status:'processed',
+        amount:25000,
+        currency:'NGN'
+      }
+    });
+    assert.equal(duplicateRefundWebhook.status,200);
+    assert.equal(duplicateRefundWebhook.body.duplicate,true);
 
     const refundList=await call('/api/v1/business/bookings/'+booking.body.data.id+'/refunds',{
       headers:first.headers
