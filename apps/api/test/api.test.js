@@ -677,6 +677,12 @@ test('business service catalogue supports create, list, update and delete', asyn
       method:'DELETE',headers:account.headers
     });
     assert.equal(deleted.status,204);
+
+    const repeatedDelete=await request(base,'/api/v1/business/services/'+id,{
+      method:'DELETE',headers:account.headers
+    });
+    assert.equal(repeatedDelete.status,204);
+
     const missing=await request(base,'/api/v1/business/services/'+id,{headers:account.headers});
     assert.equal(missing.status,404);
   } finally {
