@@ -1343,6 +1343,134 @@ test('provider onboarding, verification, invitation, assignment and job completi
     });
     assert.equal(finalBooking.status,200);
     assert.equal(finalBooking.body.data.status,'completed');
+
+    const paymentEnvironmentKeys=[
+      'PAYMENT_PROVIDER','PAYMENT_RETURN_URL','PAYSTACK_SECRET_KEY',
+      'PAYSTACK_WEBHOOK_SECRET','FLUTTERWAVE_SECRET_KEY',
+      'FLUTTERWAVE_WEBHOOK_SECRET_HASH'
+    ];
+    const previousPaymentEnvironment=Object.fromEntries(
+      paymentEnvironmentKeys.map(key=>[key,process.env[key]])
+    );
+    for(const key of paymentEnvironmentKeys)delete process.env[key];
+
+    const missingIdempotency=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/payment-intents',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({})
+    });
+    assert.equal(missingIdempotency.status,400);
+    assert.equal(missingIdempotency.body.error.code,'IDEMPOTENCY_KEY_REQUIRED');
+
+    const disabledPayment=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/payment-intents',{
+      method:'POST',
+      headers:{...customer.headers,'Idempotency-Key':'booking-payment-test-0001'},
+      body:JSON.stringify({})
+    });
+    assert.equal(disabledPayment.status,503);
+    assert.equal(disabledPayment.body.error.code,'PAYMENTS_DISABLED');
+
+    const badWebhook=await request(base,'/api/v1/webhooks/payments/paystack',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-paystack-signature':'00'},
+      body:JSON.stringify({event:'charge.success',data:{id:123,reference:'not-a-real-payment'}})
+    });
+    assert.equal(badWebhook.status,401);
+    assert.equal(badWebhook.body.error.code,'INVALID_WEBHOOK_SIGNATURE');
+
+    for(const key of paymentEnvironmentKeys){
+      if(previousPaymentEnvironment[key]===undefined)delete process.env[key];
+      else process.env[key]=previousPaymentEnvironment[key];
+    }
+
+    const createdReview=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/review',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({
+        businessRating:5,
+        providerRating:5,
+        reviewText:'The technician arrived on time and completed the repair professionally.'
+      })
+    });
+    assert.equal(createdReview.status,201);
+    assert.equal(createdReview.body.data.businessRating,5);
+
+    const customerReview=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/review',{
+      headers:customer.headers
+    });
+    assert.equal(customerReview.status,200);
+    assert.equal(customerReview.body.data.id,createdReview.body.data.id);
+
+    const businessReviews=await request(base,'/api/v1/business/reviews',{headers:owner.headers});
+    assert.equal(businessReviews.status,200);
+    assert.ok(businessReviews.body.data.some(item=>item.id===createdReview.body.data.id));
+
+    const businessReply=await request(base,'/api/v1/business/reviews/'+createdReview.body.data.id+'/response',{
+      method:'POST',
+      headers:owner.headers,
+      body:JSON.stringify({responseText:'Thank you for choosing our service. We appreciate your feedback.'})
+    });
+    assert.equal(businessReply.status,201);
+    assert.equal(businessReply.body.data.reviewId,createdReview.body.data.id);
+
+    const openedDispute=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/disputes',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({
+        category:'quality_issue',
+        description:'The repair was completed, but a leak returned the following morning.'
+      })
+    });
+    assert.equal(openedDispute.status,201);
+    assert.equal(openedDispute.body.data.status,'open');
+
+    const duplicateDispute=await request(base,'/api/v1/customer/bookings/'+booking.body.data.id+'/disputes',{
+      method:'POST',
+      headers:customer.headers,
+      body:JSON.stringify({
+        category:'quality_issue',
+        description:'A second dispute should not be allowed for the same booking.'
+      })
+    });
+    assert.equal(duplicateDispute.status,409);
+    assert.equal(duplicateDispute.body.error.code,'DISPUTE_ALREADY_EXISTS');
+
+    const businessDisputes=await request(base,'/api/v1/business/disputes',{headers:owner.headers});
+    assert.equal(businessDisputes.status,200);
+    assert.ok(businessDisputes.body.data.some(item=>item.id===openedDispute.body.data.id));
+
+    const businessDisputeReply=await request(base,'/api/v1/business/disputes/'+openedDispute.body.data.id+'/messages',{
+      method:'POST',
+      headers:owner.headers,
+      body:JSON.stringify({message:'We are sorry about this. We will review the repair and arrange a follow-up.'})
+    });
+    assert.equal(businessDisputeReply.status,201);
+
+    const customerDispute=await request(base,'/api/v1/customer/disputes/'+openedDispute.body.data.id,{
+      headers:customer.headers
+    });
+    assert.equal(customerDispute.status,200);
+    assert.equal(customerDispute.body.data.status,'awaiting_customer');
+    assert.ok(customerDispute.body.data.messages.length>=2);
+
+    const underReview=await request(base,'/api/v1/admin/disputes/'+openedDispute.body.data.id,{
+      method:'PATCH',
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-test-admin-key'},
+      body:JSON.stringify({status:'under_review',resolutionNote:'The dispute has been assigned for review.'})
+    });
+    assert.equal(underReview.status,200);
+    assert.equal(underReview.body.data.status,'under_review');
+    assert.equal(underReview.body.data.resolvedAt,null);
+
+    const resolvedDispute=await request(base,'/api/v1/admin/disputes/'+openedDispute.body.data.id,{
+      method:'PATCH',
+      headers:{'X-SwiftServe-Admin-Key':'swiftserve-test-admin-key'},
+      body:JSON.stringify({status:'resolved_customer',resolutionNote:'The business agreed to revisit the service at no additional cost.'})
+    });
+    assert.equal(resolvedDispute.status,200);
+    assert.equal(resolvedDispute.body.data.status,'resolved_customer');
+    assert.ok(resolvedDispute.body.data.resolvedAt);
+
   } finally {
     await stopTestServer(server);
     if(previousAdminKey===undefined)delete process.env.SWIFTSERVE_ADMIN_API_KEY;
