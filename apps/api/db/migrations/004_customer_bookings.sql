@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS customer_locations (
   postal_code VARCHAR(24),
   delivery_instructions VARCHAR(500),
   is_default BOOLEAN NOT NULL DEFAULT false,
+  archived_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT customer_locations_country_check CHECK (
