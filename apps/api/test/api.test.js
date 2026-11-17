@@ -1379,3 +1379,21 @@ test('payment endpoints fail closed without gateway configuration and reject uns
     else process.env.PAYSTACK_SECRET_KEY=previousSecret;
   }
 });
+
+test('admin audit and reconciliation endpoints require the platform admin key', async () => {
+  const server=await startTestServer();
+  try {
+    const base='http://127.0.0.1:'+server.address().port;
+    for(const path of [
+      '/api/v1/admin/audit-logs',
+      '/api/v1/admin/finance/summary',
+      '/api/v1/admin/finance/reconciliation'
+    ]){
+      const response=await request(base,path);
+      assert.equal(response.status,401);
+      assert.equal(response.body.error.code,'ADMIN_UNAUTHORIZED');
+    }
+  } finally {
+    await stopTestServer(server);
+  }
+});
