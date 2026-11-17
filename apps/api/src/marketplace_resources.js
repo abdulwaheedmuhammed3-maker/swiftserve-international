@@ -512,6 +512,16 @@ export async function cancelCustomerBooking(userId,bookingId,note=null) {
   return booking;
 }
 
+export async function notifyUser(userId,type,title,body,resourceId=null) {
+  const result=await queryDatabase(
+    'INSERT INTO notifications (user_id,notification_type,title,body,resource_type,resource_id) VALUES ($1,$2,$3,$4,$5,$6)',
+    [userId,type,title,body,resourceId?'booking':null,resourceId]
+  );
+  if (result) return true;
+  pushMemoryNotification(userId,type,title,body,resourceId);
+  return true;
+}
+
 export async function listBookingEvents(userId,bookingId,scope='customer') {
   const booking=scope==='customer'
     ? await getCustomerBooking(userId,bookingId)
