@@ -13,6 +13,12 @@ import {
 } from './finance_resources.js';
 import { getCustomerBooking, getBusinessBooking } from './marketplace_resources.js';
 import { getCompletedAssignmentForBooking } from './provider_assignments.js';
+import {
+  writeAdminAuditEvent,getFinanceOperationsSummary,listAdminAuditEvents,
+  createFinanceReconciliationRun,listFinanceReconciliationCandidates,
+  recordFinanceReconciliationItem,finishFinanceReconciliationRun,
+  listFinanceReconciliationRuns,getFinanceReconciliationRun,markPayoutReconciled
+} from './admin_resources.js';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
