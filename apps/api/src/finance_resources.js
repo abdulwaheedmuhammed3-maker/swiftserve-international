@@ -295,7 +295,10 @@ export async function updateRefundStatus(reference,status,providerRefundId=null,
       await client.query('UPDATE payment_intents SET status=$2,updated_at=now() WHERE id=$1',[row.payment_intent_id,target]);
     return mapRefund(updated.rows[0]);
   });
-  if(result!==null)return result;
+  if(result!==null){
+    if(result?.bookingId)await createOrRefreshPayoutForCompletedAssignment(result.bookingId);
+    return result;
+  }
   const item=[...refunds.values()].find(refund=>refund.reference===reference||refund.providerRefundId===reference);
   if(!item)return null;
   item.status=status;
@@ -365,13 +368,14 @@ export async function createOrRefreshPayoutForCompletedAssignment(bookingId,memo
     const payout=existing.rows[0];
     if(payout&&['processing','paid','on_hold'].includes(payout.status))return mapPayout(payout);
     if(!row.payment_id||!['succeeded','partially_refunded'].includes(row.payment_status)){
+      const blockedStatus=row.payment_status==='refunded'?'on_hold':'awaiting_payment';
       if(payout){
-        const updated=await client.query("UPDATE provider_payouts SET status='awaiting_payment',updated_at=now() WHERE id=$1 RETURNING *",[payout.id]);
+        const updated=await client.query("UPDATE provider_payouts SET status=$2,updated_at=now() WHERE id=$1 RETURNING *",[payout.id,blockedStatus]);
         return mapPayout(updated.rows[0]);
       }
       const inserted=await client.query(
-        "INSERT INTO provider_payouts (id,business_id,booking_id,booking_assignment_id,provider_user_id,currency_code,gross_amount_minor,platform_fee_minor,net_amount_minor,status) VALUES ($1,$2,$3,$4,$5,$6,0,0,0,'awaiting_payment') RETURNING *",
-        [randomUUID(),row.business_id,row.booking_id,row.assignment_id,row.provider_user_id,row.currency_code]
+        "INSERT INTO provider_payouts (id,business_id,booking_id,booking_assignment_id,provider_user_id,currency_code,gross_amount_minor,platform_fee_minor,net_amount_minor,status) VALUES ($1,$2,$3,$4,$5,$6,0,0,0,$7) RETURNING *",
+        [randomUUID(),row.business_id,row.booking_id,row.assignment_id,row.provider_user_id,row.currency_code,blockedStatus]
       );
       return mapPayout(inserted.rows[0]);
     }
@@ -597,6 +601,17 @@ export async function recordProviderWebhookEvent(provider,eventKey,eventType,pay
   return true;
 }
 
+export async function getCustomerDisputeById(userId,id){
+  const result=await queryDatabase(
+    'SELECT d.* FROM disputes d JOIN bookings b ON b.id=d.booking_id AND b.business_id=d.business_id WHERE b.customer_user_id=$1 AND d.id=$2',
+    [userId,id]
+  );
+  if(result)return result.rows[0]?mapDispute(result.rows[0]):null;
+  const item=disputes.get(id);
+  if(!item)return null;
+  return item;
+}
+
 export async function getCustomerDispute(userId,bookingId){
   const result=await queryDatabase(
     'SELECT d.* FROM disputes d JOIN bookings b ON b.id=d.booking_id AND b.business_id=d.business_id WHERE b.customer_user_id=$1 AND d.booking_id=$2',
@@ -615,12 +630,12 @@ export async function getBusinessDispute(businessId,bookingId){
 export async function addDisputeMessage(input){
   const result=await withDatabaseTransaction(async client=>{
     const dispute=await client.query(
-      'SELECT * FROM disputes WHERE id=$1 AND business_id=$2 FOR UPDATE',
+      'SELECT d.*,b.customer_user_id FROM disputes d JOIN bookings b ON b.id=d.booking_id AND b.business_id=d.business_id WHERE d.id=$1 AND d.business_id=$2 FOR UPDATE OF d',
       [input.disputeId,input.businessId]
     );
     const row=dispute.rows[0];
     if(!row||['resolved','rejected'].includes(row.status))return null;
-    if(input.role==='customer'&&row.opened_by_user_id!==input.userId)return null;
+    if(input.role==='customer'&&row.customer_user_id!==input.userId)return null;
     const inserted=await client.query(
       'INSERT INTO dispute_messages (dispute_id,author_user_id,author_role,message) VALUES ($1,$2,$3,$4) RETURNING *',
       [input.disputeId,input.userId,input.role,input.message]
@@ -656,13 +671,13 @@ export async function listDisputeMessages(input){
   return disputeMessages.get(input.disputeId)||[];
 }
 
-export async function listAdminDisputes(status='open'){
+export async function listAdminDisputes(status='active'){
   const result=await queryDatabase(
-    'SELECT d.*,b.public_reference FROM disputes d JOIN bookings b ON b.id=d.booking_id AND b.business_id=d.business_id WHERE ($1::text IS NULL OR d.status=$1) ORDER BY d.created_at',
+    "SELECT d.*,b.public_reference FROM disputes d JOIN bookings b ON b.id=d.booking_id AND b.business_id=d.business_id WHERE ($1::text IS NULL OR ($1='active' AND d.status IN ('open','in_review')) OR d.status=$1) ORDER BY d.created_at",
     [status]
   );
   if(result)return result.rows.map(mapDispute);
-  return [...disputes.values()].filter(item=>!status||item.status===status);
+  return [...disputes.values()].filter(item=>!status||(status==='active'?['open','in_review'].includes(item.status):item.status===status));
 }
 
 export async function resolveDispute(id,status,resolution,note,adminUserId=null){
@@ -670,7 +685,7 @@ export async function resolveDispute(id,status,resolution,note,adminUserId=null)
     const selected=await client.query('SELECT status FROM disputes WHERE id=$1 FOR UPDATE',[id]);
     if(!selected.rows[0]||['resolved','rejected'].includes(selected.rows[0].status))return null;
     const updated=await client.query(
-      'UPDATE disputes SET status=$2,resolution=$3,resolution_note=$4,resolved_by_user_id=$5,resolved_at=now(),updated_at=now() WHERE id=$1 RETURNING *',
+      "UPDATE disputes SET status=$2,resolution=$3,resolution_note=$4,resolved_by_user_id=$5,resolved_at=CASE WHEN $2 IN ('resolved','rejected') THEN now() ELSE NULL END,updated_at=now() WHERE id=$1 RETURNING *",
       [id,status,resolution,note,adminUserId]
     );
     await client.query(
