@@ -9,6 +9,10 @@ const pool = process.env.DATABASE_URL
     })
   : null;
 
+if (!pool && process.env.NODE_ENV === 'production') {
+  throw new Error('DATABASE_URL is required in production. Refusing to start with volatile in-memory storage.');
+}
+
 const memoryStore = new Map();
 
 function fromRow(row) {
