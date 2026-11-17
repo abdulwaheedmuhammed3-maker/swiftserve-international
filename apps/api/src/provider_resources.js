@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isPlatformAdmin, listBusinessMembers, queryDatabase, withDatabaseTransaction } from './repository.js';
-import { getBusinessBooking, updateBusinessBookingStatus } from './marketplace_resources.js';
+import { createMemoryNotification, getBusinessBooking, updateBusinessBookingStatus } from './marketplace_resources.js';
 
 export const SERVICE_CATEGORIES = new Set([
   'cleaning','laundry','electrical','plumbing','ac-repair','appliance-repair','errand'
@@ -12,7 +12,6 @@ const areas = new Map();
 const windows = new Map();
 const assignments = new Map();
 const assignmentEvents = new Map();
-const notifications = new Map();
 
 function mapProfile(row) {
   if (!row) return null;
@@ -74,8 +73,7 @@ function mapAssignmentRow(row) {
   };
 }
 function pushNotification(userId,type,title,body,bookingId) {
-  const id=randomUUID();
-  notifications.set(id,{id,userId,type,title,body,resourceType:'booking',resourceId:bookingId,readAt:null,createdAt:new Date().toISOString()});
+  createMemoryNotification(userId,type,title,body,bookingId);
 }
 function addAssignmentEvent(item,fromStatus,toStatus,actorUserId,note) {
   const list=assignmentEvents.get(item.id)||[];
