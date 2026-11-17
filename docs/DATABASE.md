@@ -16,21 +16,33 @@ Never paste database credentials into chat, commit them to GitHub, or place them
 - [x] User, business, membership and session data model.
 - [x] Business-scoped service-request reads and writes in the API repository.
 - [ ] Apply migrations 001 and 002 to the actual development database.
-- [ ] Add a migration runner and applied-migration history.
-- [ ] Run PostgreSQL integration tests for accounts, sessions and business isolation.
+- [x] Add an ordered migration runner with checksums and applied-migration history.
+- [x] Add PostgreSQL integration tests for accounts, sessions and business isolation in CI.
 - [ ] Verify records survive API restarts.
 - [ ] Configure automated backups, restore testing and least-privilege database roles.
 
 Without DATABASE_URL, local development uses in-memory stores. Records disappear when the process stops. In-memory mode must never be used for production.
 
-## Migration order
+## Migration order and runner
 
-Apply these SQL files in order using a trusted PostgreSQL client or managed database SQL editor:
+Set DATABASE_URL to the target PostgreSQL database, then run:
 
-1. apps/api/db/migrations/001_initial_schema.sql
-2. apps/api/db/migrations/002_identity_business_scope.sql
+    npm run migrate --workspace @swiftserve/api
 
-The repository does not yet include an automatic migration runner. Keep an operations record of which migration versions are applied to each environment. Do not apply later migrations before earlier dependencies.
+The migration runner:
+- discovers numbered SQL files in apps/api/db/migrations;
+- applies them in filename order, one transaction per migration;
+- records each applied filename and SHA-256 checksum in schema_migrations;
+- skips migrations already applied with the same checksum;
+- fails if an applied migration file has been edited.
+
+Do not edit an already-applied migration. Add a new numbered migration instead. The API checks for the required tables and recorded migration versions during startup/readiness.
+
+For Render, the service start command can apply pending migrations before starting the API:
+
+    npm run migrate --workspace @swiftserve/api && npm start
+
+Always verify the target DATABASE_URL before running a migration command. Never run a development migration against the production database by mistake.
 
 ## Identity and business tables
 
