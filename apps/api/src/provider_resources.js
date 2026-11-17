@@ -219,6 +219,7 @@ export async function replaceProviderCategories(userId,items) {
     return {items};
   });
   if(result)return result.error?result:result.items;
+  if(!profiles.has(userId))return {error:'PROVIDER_PROFILE_REQUIRED'};
   categories.set(userId,new Set(items));
   return items;
 }
@@ -235,6 +236,7 @@ export async function createProviderArea(userId,input) {
     [randomUUID(),userId,input.countryCode,input.region??null,input.city??null,input.postalCodePrefix??null]
   );
   if(result)return mapArea(result.rows[0]);
+  if(!profiles.has(userId))return {error:'PROVIDER_PROFILE_REQUIRED'};
   const item={id:randomUUID(),providerUserId:userId,...input,isActive:true};
   const list=areas.get(userId)||[];list.push(item);areas.set(userId,list);
   return item;
@@ -270,6 +272,7 @@ export async function replaceProviderAvailability(userId,items) {
     return {items:saved};
   });
   if(result)return result.error?result:result.items;
+  if(!profiles.has(userId))return {error:'PROVIDER_PROFILE_REQUIRED'};
   const saved=items.map(item=>({id:randomUUID(),providerUserId:userId,...item}));
   windows.set(userId,saved);return saved;
 }
@@ -317,12 +320,26 @@ export async function reviewProvider(userId,adminUserId,verificationStatus,note=
 }
 
 export async function setProviderAcceptingBookings(userId,enabled) {
-  const result=await queryDatabase(
-    "UPDATE provider_profiles SET is_accepting_bookings=$2,updated_at=now() WHERE user_id=$1 AND profile_status='active' AND verification_status='verified' RETURNING *",[userId,enabled]
-  );
-  if(result)return result.rows[0]?mapProfile(result.rows[0]):null;
+  const result=await withDatabaseTransaction(async client=>{
+    const profile=await client.query(
+      "SELECT * FROM provider_profiles WHERE user_id=$1 AND profile_status='active' AND verification_status='verified' FOR UPDATE",[userId]
+    );
+    if(!profile.rows[0])return {error:'PROVIDER_NOT_VERIFIED'};
+    if(enabled){
+      const skill=await client.query('SELECT 1 FROM provider_service_categories WHERE provider_user_id=$1 LIMIT 1',[userId]);
+      const area=await client.query('SELECT 1 FROM provider_service_areas WHERE provider_user_id=$1 AND is_active=true LIMIT 1',[userId]);
+      const schedule=await client.query('SELECT 1 FROM provider_availability_windows WHERE provider_user_id=$1 LIMIT 1',[userId]);
+      if(!skill.rowCount||!area.rowCount||!schedule.rowCount)return {error:'PROVIDER_PROFILE_INCOMPLETE'};
+    }
+    const updated=await client.query(
+      'UPDATE provider_profiles SET is_accepting_bookings=$2,updated_at=now() WHERE user_id=$1 RETURNING *',[userId,enabled]
+    );
+    return {profile:updated.rows[0]};
+  });
+  if(result)return result.error?result:mapProfile(result.profile);
   const profile=profiles.get(userId);
   if(!profile||profile.profileStatus!=='active'||profile.verificationStatus!=='verified')return null;
+  if(enabled&&(!(categories.get(userId)?.size)||!(areas.get(userId)?.length)||!(windows.get(userId)?.length)))return {error:'PROVIDER_PROFILE_INCOMPLETE'};
   profile.isAcceptingBookings=enabled;profiles.set(userId,profile);return profile;
 }
 
