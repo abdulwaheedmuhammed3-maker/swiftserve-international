@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { listBusinessMembers, queryDatabase, withDatabaseTransaction } from './repository.js';
-import { notifyUser } from './marketplace_resources.js';
+import { getBusinessBooking, notifyUser } from './marketplace_resources.js';
 
 const profiles = new Map();
 const categories = new Map();
@@ -8,7 +8,6 @@ const areas = new Map();
 const availability = new Map();
 const assignments = new Map();
 const assignmentEvents = new Map();
-const bookingsMemory = new Map();
 
 function mapProfile(row) {
   return {
@@ -344,7 +343,7 @@ export async function assignProviderToBooking(businessId,bookingId,providerUserI
   });
   if (result) return result.error?result:mapAssignment(result.assignment);
 
-  const booking=bookingsMemory.get(bookingId);
+  const booking=await getBusinessBooking(businessId,bookingId);
   const profile=profiles.get(providerUserId);
   if (!booking||booking.businessId!==businessId||booking.status!=='confirmed') return {error:'Only confirmed bookings can be assigned.'};
   if (!profile||profile.status!=='approved') return {error:'Only approved providers can be assigned.'};
@@ -362,7 +361,7 @@ export async function assignProviderToBooking(businessId,bookingId,providerUserI
   const assignment={id:randomUUID(),businessId,bookingId,providerUserId,assignedByUserId:actorId,
     status:'offered',scheduledStartAt:start,scheduledEndAt:end,offeredAt:new Date().toISOString()};
   assignments.set(assignment.id,assignment);
-  bookingsMemory.set(bookingId,{...booking,status:'assigned'});
+  booking.status='assigned';
   assignmentEvents.set(assignment.id,[{fromStatus:null,toStatus:'offered',actorUserId:actorId}]);
   await notifyUser(providerUserId,'provider_assignment','New job offered','A business has offered you a household-service booking.',bookingId);
   return assignment;
@@ -427,10 +426,10 @@ export async function updateProviderAssignment(providerUserId,assignmentId,actio
   const history=assignmentEvents.get(assignmentId)||[];
   history.push({fromStatus:pair[0],toStatus:pair[1],actorUserId:providerUserId,note});
   assignmentEvents.set(assignmentId,history);
-  const booking=bookingsMemory.get(item.bookingId);
+  const booking=await getBusinessBooking(item.businessId,item.bookingId);
   if (booking) {
     const next=action==='decline'?'confirmed':action==='start'?'in_progress':action==='complete'?'completed':booking.status;
-    if (next!==booking.status) bookingsMemory.set(item.bookingId,{...booking,status:next});
+    if (next!==booking.status) booking.status=next;
   }
   const message=action==='decline'?'The provider declined the booking.':'The provider updated booking progress to '+pair[1]+'.';
   if (action==='decline') {
@@ -472,8 +471,8 @@ export async function cancelBusinessAssignment(businessId,bookingId,assignmentId
   const item=assignments.get(assignmentId);
   if (!item||item.businessId!==businessId||item.bookingId!==bookingId||!['offered','accepted'].includes(item.status)) return null;
   item.status='cancelled';item.cancellationNote=note;assignments.set(assignmentId,item);
-  const booking=bookingsMemory.get(bookingId);
-  if (booking&&booking.status==='assigned') bookingsMemory.set(bookingId,{...booking,status:'confirmed'});
+  const booking=await getBusinessBooking(businessId,bookingId);
+  if (booking&&booking.status==='assigned') booking.status='confirmed';
   await notifyUser(item.providerUserId,'provider_assignment_cancelled','Assignment cancelled','The business cancelled your job offer.',bookingId);
   return item;
 }
