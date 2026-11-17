@@ -1,5 +1,5 @@
 import { randomUUID, randomBytes } from 'node:crypto';
-import { listActiveBusinessSummaries, queryDatabase, withDatabaseTransaction } from './repository.js';
+import { listActiveBusinessSummaries, listBusinessMembers, queryDatabase, withDatabaseTransaction } from './repository.js';
 import { getBranch, getService, listAreas, listBranches, listServices } from './business_resources.js';
 
 const locations = new Map();
@@ -57,6 +57,14 @@ function mapQuote(row) {
     respondedAt:row.responded_at?new Date(row.responded_at).toISOString():null,
     createdAt:row.created_at?new Date(row.created_at).toISOString():null
   };
+}
+
+function pushMemoryNotification(userId,type,title,body,resourceId) {
+  const id=randomUUID();
+  notifications.set(id,{
+    id,userId,type,title,body,resourceType:'booking',resourceId,
+    readAt:null,createdAt:new Date().toISOString()
+  });
 }
 
 function areaMatches(item, countryCode, city) {
@@ -291,7 +299,11 @@ export async function createCustomerBooking(userId,input,service,location) {
     latestQuoteId:null,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()
   };
   bookings.set(id,booking);
-  events.set(id,[{fromStatus:null,toStatus:'requested',actorUserId:userId}]);
+  const timestamp=new Date().toISOString();
+  events.set(id,[{fromStatus:null,toStatus:'requested',actorUserId:userId,note:'Customer submitted a booking request.',createdAt:timestamp}]);
+  for (const member of await listBusinessMembers(input.businessId)) {
+    pushMemoryNotification(member.userId,'booking_requested','New booking request','A customer has requested '+service.name+'.',id);
+  }
   return booking;
 }
 
@@ -357,6 +369,10 @@ export async function createBookingQuote(businessId,bookingId,actorId,input) {
   booking.status='quoted';
   booking.latestQuoteId=quote.id;
   bookings.set(bookingId,booking);
+  pushMemoryNotification(booking.customerUserId,'booking_quote','New quote received','A service business has sent you a quote.',bookingId);
+  const history=events.get(bookingId)||[];
+  history.push({fromStatus:'requested',toStatus:'quoted',actorUserId:actorId,note:'Business sent a price quote.',createdAt:new Date().toISOString()});
+  events.set(bookingId,history);
   return {quote,conflict:false};
 }
 
@@ -395,6 +411,12 @@ export async function respondToBookingQuote(userId,bookingId,quoteId,action) {
     booking.confirmedEndAt=booking.requestedEndAt;
   }
   bookings.set(bookingId,booking);
+  for (const member of await listBusinessMembers(booking.businessId)) {
+    pushMemoryNotification(member.userId,'booking_quote_response','Quote response received','The customer has responded to the quote.',bookingId);
+  }
+  const history=events.get(bookingId)||[];
+  history.push({fromStatus:nextBooking==='confirmed'?'quoted':'quoted',toStatus:nextBooking,actorUserId:userId,note:'Customer responded to quote.',createdAt:new Date().toISOString()});
+  events.set(bookingId,history);
   return {status:nextBooking};
 }
 
@@ -429,8 +451,9 @@ export async function updateBusinessBookingStatus(businessId,bookingId,actorId,n
   booking.updatedAt=new Date().toISOString();
   bookings.set(bookingId,booking);
   const list=events.get(bookingId)||[];
-  list.push({fromStatus:previous,toStatus:nextStatus,actorUserId:actorId,note});
+  list.push({fromStatus:previous,toStatus:nextStatus,actorUserId:actorId,note,createdAt:new Date().toISOString()});
   events.set(bookingId,list);
+  pushMemoryNotification(booking.customerUserId,'booking_status','Booking update','Your booking status is now '+nextStatus+'.',bookingId);
   return booking;
 }
 
@@ -452,8 +475,11 @@ export async function cancelCustomerBooking(userId,bookingId,note=null) {
   booking.status='cancelled';
   bookings.set(bookingId,booking);
   const list=events.get(bookingId)||[];
-  list.push({fromStatus:previous,toStatus:'cancelled',actorUserId:userId,note});
+  list.push({fromStatus:previous,toStatus:'cancelled',actorUserId:userId,note,createdAt:new Date().toISOString()});
   events.set(bookingId,list);
+  for (const member of await listBusinessMembers(booking.businessId)) {
+    pushMemoryNotification(member.userId,'booking_cancelled','Booking cancelled','A customer cancelled a booking.',bookingId);
+  }
   return booking;
 }
 
