@@ -16,7 +16,7 @@ Never paste database credentials into chat, commit them to GitHub, or place them
 - [x] User, business, membership and session data model.
 - [x] Business profile fields, branches, catalogue, hours, service areas and invitations.
 - [x] Business-scoped service-request reads and writes in the API repository.
-- [ ] Apply migrations 001 and 002 to the actual development database.
+- [ ] Apply migrations 001, 002 and 003 to the actual development database.
 - [x] Add an ordered migration runner with checksums and applied-migration history.
 - [x] Add PostgreSQL integration tests for accounts, sessions and business isolation in CI.
 - [ ] Verify records survive API restarts.
@@ -82,12 +82,12 @@ Before retaining old records, identify their true owner and use a reviewed, audi
 ## Local setup
 
 1. Create a development PostgreSQL database with your chosen managed provider.
-2. Apply migrations 001 and 002 in order.
-3. Copy apps/api/.env.example to apps/api/.env.
-4. Set DATABASE_URL in the local environment. Do not commit the .env file.
+2. Copy apps/api/.env.example to apps/api/.env.
+3. Set DATABASE_URL in the local environment. Do not commit the .env file.
+4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001, 002 and 003 in order.
 5. Start the API and open /readyz. It should report PostgreSQL storage when the connection succeeds.
-6. Register a test business account and create a test request.
-7. Restart the API, sign in again, and verify that the account, business and request remain.
+6. Register a test business account, create a service, add a branch and set its hours.
+7. Restart the API, sign in again, and verify that the account, business and records remain.
 
 For deployment, add DATABASE_URL as a secret environment variable in the hosting provider. Do not put it in frontend code, a GitHub source file or a public CI log.
 
