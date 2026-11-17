@@ -78,6 +78,8 @@ export async function checkDatabase() {
     "to_regclass('public.businesses') AS businesses, " +
     "to_regclass('public.business_memberships') AS business_memberships, " +
     "to_regclass('public.sessions') AS sessions, " +
+    "to_regclass('public.platform_admins') AS platform_admins, " +
+    "to_regclass('public.platform_admin_sessions') AS platform_admin_sessions, " +
     "to_regclass('public.business_branches') AS business_branches, " +
     "to_regclass('public.business_services') AS business_services, " +
     "to_regclass('public.business_hours') AS business_hours, " +
@@ -122,7 +124,7 @@ export async function checkDatabase() {
     'payment_intents', 'payment_events', 'provider_webhook_events', 'refunds',
     'provider_payout_accounts', 'provider_payouts', 'provider_payout_events',
     'booking_reviews', 'disputes', 'dispute_messages', 'dispute_events',
-    'admin_audit_logs', 'finance_reconciliation_runs', 'finance_reconciliation_items'];
+    'admin_audit_logs', 'finance_reconciliation_runs', 'finance_reconciliation_items',\n    'platform_admins', 'platform_admin_sessions'];
   const missingTables = requiredTables.filter(name => !row[name]);
 
   if (missingTables.length) {
@@ -140,7 +142,8 @@ export async function checkDatabase() {
     '004_customer_bookings.sql',
     '005_provider_operations.sql',
     '006_finance_reviews_disputes.sql',
-    '007_admin_audit_reconciliation.sql'
+    '007_admin_audit_reconciliation.sql',
+    '008_platform_admin_identity.sql'
   ];
   const missingMigrations = requiredMigrations.filter(version => !applied.has(version));
 
