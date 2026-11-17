@@ -1,33 +1,43 @@
 # SwiftServe International Roadmap
 
-SwiftServe is being developed as an international household-services platform. The sequence below prioritizes a secure, useful business workflow before adding marketplace breadth or entering additional countries.
+SwiftServe is being developed as an international household-services platform. The sequence prioritizes a secure business workflow before adding marketplace breadth or entering additional countries.
 
 ## Stage 0 — Stabilise the existing foundation
 
-- [x] Maintain the international repository and Android/API workspace layout.
-- [x] Keep the PostgreSQL adapter and add a production guard against volatile storage.
+- [x] Keep the international repository and Android/API workspace layout.
+- [x] Add a production guard against volatile storage.
 - [x] Add local environment loading without overriding host-provided environment variables.
 - [x] Add startup database checks, liveness/readiness endpoints and graceful shutdown.
-- [x] Harden request parsing, identifiers, API responses and current job-status transitions.
-- [x] Expand API regression tests from 6 to 14 cases.
+- [x] Harden request parsing, identifiers, API responses and job-status transitions.
+- [x] Expand API regression tests and verify the API CI workflow.
 - [x] Align the Android MVP with HTTPS API connections and terminal job statuses.
-- [x] Correct the current architecture and database documentation.
-- [ ] Confirm GitHub Actions API and Android builds pass for the stabilisation pull request.
-- [ ] Add PostgreSQL integration tests and verify records survive API restarts.
+- [x] Correct architecture, database and setup documentation.
+- [x] Verify GitHub Actions API tests and Android APK build on the stabilisation pull request.
+- [ ] Apply database migrations to the development database.
+- [ ] Add PostgreSQL integration tests and verify data survives API restarts.
 - [ ] Verify the deployed API configuration and readiness behaviour.
 
-**Exit condition:** automated checks pass, PostgreSQL persistence is verified, and the deployment does not silently use volatile storage.
+**Exit condition:** the actual development database is migrated, automated checks pass, PostgreSQL persistence is verified, and deployment does not use volatile storage.
 
 ## Stage 1 — Identity and business isolation
 
-- [ ] Add account registration, login, logout and session expiry.
-- [ ] Add secure password hashing and session-token storage.
-- [ ] Add user roles and business memberships.
-- [ ] Add business-scoped authorization to every business-owned API operation.
-- [ ] Add rate limiting and authentication abuse protection.
-- [ ] Add migration and integration tests for identity and authorization.
+- [x] Add account registration and login for customer and business account types.
+- [x] Add scrypt password hashing.
+- [x] Add opaque bearer sessions with seven-day expiry and logout revocation.
+- [x] Add business registration, business ownership and membership records.
+- [x] Require authentication and explicit business context for service-request endpoints.
+- [x] Scope service-request reads and writes to the selected active business membership.
+- [x] Restrict request deletion to business owners and administrators.
+- [x] Add Android business registration, sign-in and sign-out.
+- [x] Encrypt the Android bearer token with Android Keystore.
+- [x] Add process-local throttling for registration and login attempts.
+- [x] Add tests for account lifecycle, authentication and cross-business access.
+- [ ] Apply migration 002 to the development database and run PostgreSQL integration tests.
+- [ ] Add email verification, password reset, account recovery and administrative session revocation.
+- [ ] Move rate limiting to a shared gateway/store before horizontal scaling.
+- [ ] Review security, privacy and session policies for the first pilot.
 
-**Exit condition:** users can securely sign in, and one business cannot read or change another business's data.
+**Exit condition:** users can securely sign in, and a business cannot read or change another business's data in the real PostgreSQL environment.
 
 ## Stage 2 — Business operations
 
@@ -36,9 +46,10 @@ SwiftServe is being developed as an international household-services platform. T
 - [ ] Add operating hours, availability and booking capacity.
 - [ ] Add job assignment and a complete booking status history.
 - [ ] Add search, filtering and pagination.
-- [ ] Build the business dashboard and complete Android workflows.
+- [ ] Add business settings and multiple-business switching in Android.
+- [ ] Build business dashboard metrics and operational workflows.
 
-**Exit condition:** a pilot business can onboard, publish its services and manage its work without developer intervention.
+**Exit condition:** a pilot business can onboard, publish its services and manage work without developer intervention.
 
 ## Stage 3 — Customer and provider experiences
 
