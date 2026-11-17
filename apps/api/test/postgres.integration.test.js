@@ -272,6 +272,159 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(quoteAccepted.status, 200);
     assert.equal(quoteAccepted.body.data.status, 'confirmed');
 
+    const providerEmail = 'integration-provider-' + randomUUID() + '@example.test';
+    const providerRegistration = await call('/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: providerEmail,
+        password: 'Integration-Strong#12345',
+        fullName: 'Integration Provider',
+        accountType: 'provider',
+        countryCode: 'NG'
+      })
+    });
+    assert.equal(providerRegistration.status, 201);
+    const providerUser = providerRegistration.body.data.user;
+    userIds.push(providerUser.id);
+    const providerHeaders = {
+      Authorization: 'Bearer ' + providerRegistration.body.data.accessToken
+    };
+
+    const providerProfile = await call('/api/v1/provider/profile', {
+      headers: providerHeaders
+    });
+    assert.equal(providerProfile.status, 200);
+    assert.equal(providerProfile.body.data.verificationStatus, 'unverified');
+
+    const providerProfileUpdate = await call('/api/v1/provider/profile', {
+      method: 'PATCH',
+      headers: providerHeaders,
+      body: JSON.stringify({
+        displayName: 'Integration Home Technician',
+        phoneE164: '+2348098765432',
+        timeZone: 'Africa/Lagos'
+      })
+    });
+    assert.equal(providerProfileUpdate.status, 200);
+
+    const providerSkills = await call('/api/v1/provider/skills', {
+      method: 'PUT',
+      headers: providerHeaders,
+      body: JSON.stringify({ items: [{ category: 'cleaning', yearsExperience: 4 }] })
+    });
+    assert.equal(providerSkills.status, 200);
+
+    const providerArea = await call('/api/v1/provider/service-areas', {
+      method: 'POST',
+      headers: providerHeaders,
+      body: JSON.stringify({ countryCode: 'NG', city: 'Ilorin', region: 'Kwara' })
+    });
+    assert.equal(providerArea.status, 201);
+
+    const providerDays = Array.from({ length: 7 }, (_, dayOfWeek) => ({
+      dayOfWeek,
+      isAvailable: true,
+      opensAt: '00:00',
+      closesAt: '23:59'
+    }));
+    const providerAvailability = await call('/api/v1/provider/availability', {
+      method: 'PUT',
+      headers: providerHeaders,
+      body: JSON.stringify({ days: providerDays })
+    });
+    assert.equal(providerAvailability.status, 200);
+    assert.equal(providerAvailability.body.data.length, 7);
+
+    const verificationRequest = await call('/api/v1/provider/verification/request', {
+      method: 'POST',
+      headers: providerHeaders
+    });
+    assert.equal(verificationRequest.status, 200);
+    assert.equal(verificationRequest.body.data.verificationStatus, 'pending_review');
+
+    const previousAdminKey = process.env.SWIFTSERVE_ADMIN_API_KEY;
+    process.env.SWIFTSERVE_ADMIN_API_KEY = 'swiftserve-ci-admin-key';
+    const verified = await call('/api/v1/admin/providers/' + providerUser.id + '/verification', {
+      method: 'PATCH',
+      headers: { 'X-SwiftServe-Admin-Key': 'swiftserve-ci-admin-key' },
+      body: JSON.stringify({ status: 'verified', note: 'CI provider verification review.' })
+    });
+    assert.equal(verified.status, 200);
+    assert.equal(verified.body.data.verificationStatus, 'verified');
+    if (previousAdminKey === undefined) delete process.env.SWIFTSERVE_ADMIN_API_KEY;
+    else process.env.SWIFTSERVE_ADMIN_API_KEY = previousAdminKey;
+
+    const providerInvite = await call('/api/v1/business/providers/invitations', {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify({ email: providerEmail })
+    });
+    assert.equal(providerInvite.status, 201);
+
+    const providerAcceptedInvite = await call('/api/v1/provider/invitations/accept', {
+      method: 'POST',
+      headers: providerHeaders,
+      body: JSON.stringify({ invitationToken: providerInvite.body.data.invitationToken })
+    });
+    assert.equal(providerAcceptedInvite.status, 200);
+    assert.equal(providerAcceptedInvite.body.data.businessId, first.business.id);
+
+    const linkedProviders = await call('/api/v1/business/providers', {
+      headers: first.headers
+    });
+    assert.equal(linkedProviders.status, 200);
+    assert.ok(linkedProviders.body.data.some(item => item.userId === providerUser.id));
+
+    const assignmentStart = new Date(Date.now() + 96 * 60 * 60 * 1000);
+    const assignmentEnd = new Date(assignmentStart.getTime() + 2 * 60 * 60 * 1000);
+    const assignment = await call('/api/v1/business/bookings/' + booking.body.data.id + '/assignments', {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify({
+        providerUserId: providerUser.id,
+        scheduledStartAt: assignmentStart.toISOString(),
+        scheduledEndAt: assignmentEnd.toISOString(),
+        providerNote: 'CI test assignment.'
+      })
+    });
+    assert.equal(assignment.status, 201);
+    assert.equal(assignment.body.data.status, 'offered');
+
+    const providerBookings = await call('/api/v1/provider/bookings', {
+      headers: providerHeaders
+    });
+    assert.equal(providerBookings.status, 200);
+    assert.ok(providerBookings.body.data.some(item => item.bookingId === booking.body.data.id));
+
+    const providerAcceptedAssignment = await call('/api/v1/provider/bookings/' + booking.body.data.id + '/respond', {
+      method: 'POST',
+      headers: providerHeaders,
+      body: JSON.stringify({ action: 'accept' })
+    });
+    assert.equal(providerAcceptedAssignment.status, 200);
+    assert.equal(providerAcceptedAssignment.body.data.status, 'accepted');
+
+    const providerStarted = await call('/api/v1/provider/bookings/' + booking.body.data.id + '/status', {
+      method: 'PATCH',
+      headers: providerHeaders,
+      body: JSON.stringify({ status: 'in_progress' })
+    });
+    assert.equal(providerStarted.status, 200);
+
+    const providerCompleted = await call('/api/v1/provider/bookings/' + booking.body.data.id + '/status', {
+      method: 'PATCH',
+      headers: providerHeaders,
+      body: JSON.stringify({ status: 'completed', note: 'CI assignment completed.' })
+    });
+    assert.equal(providerCompleted.status, 200);
+    assert.equal(providerCompleted.body.data.status, 'completed');
+
+    const finalBooking = await call('/api/v1/customer/bookings/' + booking.body.data.id, {
+      headers: customerHeaders
+    });
+    assert.equal(finalBooking.status, 200);
+    assert.equal(finalBooking.body.data.status, 'completed');
+
     const otherBusinessBookings = await call('/api/v1/business/bookings', {
       headers: second.headers
     });
