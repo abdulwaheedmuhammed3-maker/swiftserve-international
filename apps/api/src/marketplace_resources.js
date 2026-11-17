@@ -294,7 +294,16 @@ export async function createCustomerBooking(userId,input,service,location) {
     id,reference,businessId:input.businessId,serviceId:service.id,branchId:input.branchId??null,
     customerUserId:userId,customerLocationId:location?.id??null,serviceName:service.name,
     serviceCategory:service.category,pricingModel:service.pricingModel,currencyCode:service.currencyCode,
-    serviceAddress:address,requestedStartAt:input.requestedStartAt,requestedEndAt:input.requestedEndAt??null,
+    serviceAddress:{
+      recipientName:address.recipientName,
+      phoneE164:address.phoneE164??null,
+      countryCode:address.countryCode,
+      addressLine1:address.addressLine1,
+      addressLine2:address.addressLine2??null,
+      city:address.city,
+      region:address.region??null,
+      postalCode:address.postalCode??null
+    },requestedStartAt:input.requestedStartAt,requestedEndAt:input.requestedEndAt??null,
     confirmedStartAt:null,confirmedEndAt:null,customerNotes:input.customerNotes??null,status:'requested',
     latestQuoteId:null,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()
   };
