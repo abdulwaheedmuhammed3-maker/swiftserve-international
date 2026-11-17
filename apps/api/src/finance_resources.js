@@ -357,7 +357,8 @@ export async function getProviderPayoutAccount(userId){
 }
 
 export async function createOrRefreshPayoutForCompletedAssignment(bookingId,memoryAssignment=null){
-  const feeBps=Math.max(0,Math.min(5000,Number(process.env.SWIFTSERVE_PLATFORM_FEE_BPS||0)));
+  const configuredFee=Number(process.env.SWIFTSERVE_PLATFORM_FEE_BPS||0);
+  const feeBps=Number.isInteger(configuredFee)&&configuredFee>=0&&configuredFee<=5000?configuredFee:0;
   const result=await withDatabaseTransaction(async client=>{
     const selected=await client.query(
       "SELECT a.id AS assignment_id,a.business_id,a.booking_id,a.provider_user_id,b.currency_code,b.status AS booking_status,p.id AS payment_id,p.amount_minor,p.status AS payment_status FROM booking_assignments a JOIN bookings b ON b.id=a.booking_id AND b.business_id=a.business_id LEFT JOIN LATERAL (SELECT id,amount_minor,status FROM payment_intents WHERE booking_id=b.id AND business_id=b.business_id AND status IN ('succeeded','partially_refunded','refunded') ORDER BY paid_at DESC NULLS LAST LIMIT 1) p ON true WHERE a.booking_id=$1 AND a.status='completed' ORDER BY a.completed_at DESC NULLS LAST LIMIT 1 FOR UPDATE OF a,b",
@@ -367,7 +368,7 @@ export async function createOrRefreshPayoutForCompletedAssignment(bookingId,memo
     if(!row)return null;
     const existing=await client.query('SELECT * FROM provider_payouts WHERE booking_assignment_id=$1 FOR UPDATE',[row.assignment_id]);
     const payout=existing.rows[0];
-    if(payout&&['processing','paid','on_hold'].includes(payout.status))return mapPayout(payout);
+    if(payout&&['processing','paid'].includes(payout.status))return mapPayout(payout);
     if(!row.payment_id||!['succeeded','partially_refunded'].includes(row.payment_status)){
       const blockedStatus=row.payment_status==='refunded'?'on_hold':'awaiting_payment';
       if(payout){
