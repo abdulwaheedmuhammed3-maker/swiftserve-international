@@ -1303,6 +1303,13 @@ test('provider onboarding, verification, invitation, assignment and job completi
     assert.equal(assignment.status,201);
     assert.equal(assignment.body.data.status,'offered');
 
+    const businessCannotCompleteUnacceptedWork=await request(base,'/api/v1/business/bookings/'+booking.body.data.id+'/status',{
+      method:'PATCH',
+      headers:owner.headers,
+      body:JSON.stringify({status:'in_progress'})
+    });
+    assert.equal(businessCannotCompleteUnacceptedWork.status,422);
+
     const providerBookings=await request(base,'/api/v1/provider/bookings',{headers:provider.headers});
     assert.equal(providerBookings.status,200);
     assert.ok(providerBookings.body.data.some(item=>item.bookingId===booking.body.data.id));
