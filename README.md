@@ -49,7 +49,7 @@ Apply the SQL migrations in order:
 
 The current project does not yet include a migration runner. Apply both files using a trusted PostgreSQL client or your managed database SQL editor, and record which migration versions have been applied.
 
-Never commit .env files or real credentials. In production, DATABASE_URL is required and the API refuses to start without it. The server checks the configured database before listening. Without DATABASE_URL in development, the API uses temporary in-memory storage; those records disappear when the process stops.
+Never commit .env files or real credentials. In production, DATABASE_URL is required and the API refuses to start without it. The server checks the configured database and required core tables before listening. A missing migration makes database readiness fail. Without DATABASE_URL in development, the API uses temporary in-memory storage; those records disappear when the process stops.
 
 Migration 002 adds user accounts, businesses, memberships, sessions and nullable ownership columns on service_requests. Existing requests from before this migration have no business owner and are not visible through the authenticated business API. Review and associate any retained records deliberately; do not assign them to an arbitrary business.
 
