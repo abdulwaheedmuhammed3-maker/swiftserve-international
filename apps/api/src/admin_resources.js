@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { queryDatabase, withDatabaseTransaction } from './repository.js';
+import { queryDatabase } from './repository.js';
 
 const auditMemory=[];
 const runMemory=new Map();
