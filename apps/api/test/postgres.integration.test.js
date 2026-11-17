@@ -657,6 +657,14 @@ test('PostgreSQL persists accounts and isolates businesses', { skip: !hasTestDat
     assert.equal(providerPayouts.body.data[0].status,'paid');
     assert.equal(providerPayouts.body.data[0].netAmountMinor,225000);
 
+    const refundAfterPayout=await call('/api/v1/business/bookings/'+booking.body.data.id+'/refunds',{
+      method:'POST',
+      headers:first.headers,
+      body:JSON.stringify({amountMinor:10000,customerNote:'Regression test after provider payout.'})
+    });
+    assert.equal(refundAfterPayout.status,409);
+    assert.equal(refundAfterPayout.body.error.code,'REFUND_NOT_AVAILABLE');
+
     const review=await call('/api/v1/customer/bookings/'+booking.body.data.id+'/review',{
       method:'POST',
       headers:customerHeaders,
