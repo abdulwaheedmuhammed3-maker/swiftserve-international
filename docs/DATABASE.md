@@ -19,7 +19,9 @@ Never paste database credentials into chat, commit them to GitHub, or place them
 - [x] Business-scoped service-request and booking reads and writes.
 - [x] Provider profiles, skills, coverage areas, weekly availability and business links.
 - [x] Provider invitation, verification review and booking assignment tables.
-- [ ] Apply migrations 001–005 to the actual development database.
+- [x] Payment intent/transaction, allocation, refund/payout and webhook event tables.
+- [x] Review, business response, dispute and dispute-message tables.
+- [ ] Apply migrations 001–006 to the actual development database.
 - [x] Add an ordered migration runner with checksums and applied-migration history.
 - [x] Add PostgreSQL integration tests for accounts, sessions and business isolation in CI.
 - [ ] Verify records survive API restarts.
@@ -114,6 +116,30 @@ Provider verification currently records a manual review decision. No identity-do
 
 Provider invitations store token hashes. As no outbound email provider is connected, the raw token is returned once to the business user for private sharing. Acceptance requires a signed-in provider account whose email matches the invitation.
 
+## Payments and trust data model
+
+Migration 006 adds:
+
+- bookings.payment_status: not_required, pending, paid, failed, partially_refunded or refunded;
+- payment_intents: customer/booking-scoped hosted-checkout attempts, idempotency key, provider reference, amount, currency and verification state;
+- payment_transactions: verified charge/refund/adjustment records with provider references;
+- payment_allocations: intended platform/business/provider allocations;
+- refunds: refund request/processing ledger records;
+- payouts: business/provider payout ledger records and external account references;
+- payment_webhook_events: signed event hashes, idempotency and processing state;
+- service_reviews and service_review_responses: one review per completed booking and one business response;
+- service_disputes and service_dispute_messages: booking dispute state and participant/admin-only messages.
+
+Payment intents reference the business and booking through a composite foreign key. Amounts are stored in the smallest currency unit, and the currency is stored on every payment/transaction/ledger row. The hosted-checkout adapters store only gateway references and checkout URLs; SwiftServe does not store card numbers, CVV values or customer wallet balances.
+
+The current payment flow verifies provider transaction status, exact reference, amount and currency before marking the booking paid. Webhook signatures are checked before processing, and provider event identifiers are stored to prevent duplicate settlement. The API requires an Idempotency-Key on payment creation.
+
+Important: payment allocation, refund and payout tables are ledger foundations only. The API does not yet submit external refund or payout transfers, reconcile bank settlement, or calculate final platform/business/provider commission shares. A row in those tables is not evidence that funds moved. Payment collection is disabled unless a gateway provider, server-side credentials, HTTPS return URL and currency configuration are supplied.
+
+The initial adapters support Paystack and Flutterwave hosted checkout. Runtime variables include PAYMENT_PROVIDER, PAYMENT_RETURN_URL, PAYSTACK_SECRET_KEY, FLUTTERWAVE_SECRET_KEY and FLUTTERWAVE_WEBHOOK_SECRET_HASH. Optional per-gateway currency allowlists can restrict the currencies enabled in that environment. The default allowlists are code configuration only; verify actual merchant/product/country/currency capability and settlement access with the gateway before enabling a market.
+
+Reviews are limited to completed bookings, and a customer can create only one review for a booking. Disputes are limited to eligible bookings and one dispute per booking. The current platform admin endpoint uses SWIFTSERVE_ADMIN_API_KEY as a temporary gate; it does not yet use administrator accounts/roles or record an authenticated admin actor on resolutions.
+
 ## Existing data and backfill
 
 Migration 002 deliberately adds nullable business ownership columns to existing service_requests. It does not automatically assign old requests to a new business. Requests with NULL business_id are not visible in the authenticated business API.
@@ -125,12 +151,14 @@ Before retaining old records, identify their true owner and use a reviewed, audi
 1. Create a development PostgreSQL database with your chosen managed provider.
 2. Copy apps/api/.env.example to apps/api/.env.
 3. Set DATABASE_URL in the local environment. Do not commit the .env file.
-4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001–005 in order.
+4. Run npm run migrate --workspace @swiftserve/api to apply migrations 001–006 in order.
 5. Start the API and open /readyz. It should report PostgreSQL storage when the connection succeeds.
 6. Register a test business, create a service, branch and coverage area; register a test customer, save an address and request a booking.
 7. Register a provider, add skills, areas and availability, submit for review and approve using the configured admin secret.
 8. Invite the provider to the business, accept the invitation, assign a confirmed booking and complete the provider workflow.
-9. Restart the API and verify the customer booking, provider profile, assignment history and notifications remain.
+9. Configure gateway test credentials only in the local API environment, verify a gateway test checkout and signed webhook, then test disabled mode after removing the credentials.
+10. Submit a review, open a test dispute, exchange messages and resolve it using the protected admin route.
+11. Restart the API and verify customer, provider, payment, review and dispute records remain.
 
 For deployment, add DATABASE_URL as a secret environment variable in the hosting provider. Do not put it in frontend code, a GitHub source file or a public CI log.
 
@@ -143,8 +171,9 @@ Use the connection string format recommended by Supabase for the hosting environ
 - Create a least-privilege database role for the API.
 - Keep development and production databases separate.
 - Enable automated backups and test restoration.
-- Run the migration runner and verify all five schema versions against the actual development database.
+- Run the migration runner and verify all six schema versions against the actual development database.
 - Verify customer address ownership, booking isolation, quote lifecycle, provider verification, invitations, assignment authorization and schedule conflicts against the deployed PostgreSQL environment.
+- Before enabling live checkout, run each gateway's test mode for initialization, signature verification, amount/currency mismatch, duplicate webhook, refund and payout reconciliation.
 - Enforce business ownership in every read and write query.
 - Establish data minimization, retention and deletion practices.
 - Review session expiry, revocation and device token storage.
