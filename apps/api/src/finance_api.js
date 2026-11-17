@@ -449,6 +449,175 @@ async function handleBusinessTrustRoutes(req,url,user,business){
   return null;
 }
 
+function safeGatewaySnapshot(data){
+  const snapshot={};
+  for(const key of ['id','status','reference','currency','transfer_code','paid_at','created_at','gateway_response']){
+    const value=data?.[key];
+    if(value===undefined||value===null)continue;
+    snapshot[key]=typeof value==='string'?value.slice(0,300):value;
+  }
+  if(Number.isSafeInteger(Number(data?.amount)))snapshot.amount=Number(data.amount);
+  return snapshot;
+}
+
+async function reconcilePaystackCandidate(run,candidate){
+  const base={
+    entityType:candidate.entityType,localEntityId:candidate.id,
+    providerReference:candidate.providerReference,localStatus:candidate.localStatus,
+    localAmountMinor:candidate.amountMinor,currencyCode:candidate.currencyCode
+  };
+  if(candidate.entityType==='refund'){
+    return {
+      ...base,outcome:'manual_review',providerStatus:'webhook_required',
+      message:'Pending refunds are reconciled from signed Paystack refund webhooks or reviewed manually. This run does not create or repeat a refund.',
+      providerSnapshot:{source:'webhook_or_manual_review'}
+    };
+  }
+
+  const isPayment=candidate.entityType==='payment';
+  const endpoint=isPayment
+    ?'/transaction/verify/'+encodeURIComponent(candidate.providerReference)
+    :'/transfer/verify/'+encodeURIComponent(candidate.providerReference);
+  const gateway=await paystackRequest(endpoint,null,'GET');
+  if(!gateway.ok){
+    return {
+      ...base,outcome:'error',providerStatus:null,
+      message:gateway.message||'Paystack verification was unavailable.',
+      providerSnapshot:{verification:'unavailable'}
+    };
+  }
+  const data=gateway.data||{};
+  const providerStatus=String(data.status||'unknown').toLowerCase();
+  const providerAmount=Number.isSafeInteger(Number(data.amount))?Number(data.amount):null;
+  const snapshot=safeGatewaySnapshot(data);
+
+  if(isPayment){
+    if(providerStatus==='success'){
+      const eventKey=createHash('sha256')
+        .update('reconciliation|'+run.id+'|payment|'+candidate.id+'|'+String(data.id||candidate.providerReference))
+        .digest('hex');
+      const payloadHash=createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+      const verified=await markPaymentSucceeded(
+        candidate.providerReference,data,eventKey,'reconciliation.transaction.verify',payloadHash
+      );
+      if(verified.mismatch){
+        return {...base,providerStatus,outcome:'mismatch',providerAmountMinor:providerAmount,
+          message:'Paystack reports success but the amount, currency, reference or status does not match SwiftServe.',
+          providerSnapshot:snapshot};
+      }
+      if(verified.missing){
+        return {...base,providerStatus,outcome:'skipped',providerAmountMinor:providerAmount,
+          message:'The local payment record no longer exists.',
+          providerSnapshot:snapshot};
+      }
+      return {...base,providerStatus,outcome:verified.changed?'updated':'matched',
+        providerAmountMinor:providerAmount,
+        message:verified.changed?'Payment status updated from verified Paystack evidence.':'Local payment matches the verified Paystack transaction.',
+        providerSnapshot:snapshot};
+    }
+    if(['pending','processing','ongoing','queued'].includes(providerStatus)){
+      return {...base,providerStatus,outcome:'pending',providerAmountMinor:providerAmount,
+        message:'Paystack has not reached a terminal transaction status.',
+        providerSnapshot:snapshot};
+    }
+    if(['failed','abandoned'].includes(providerStatus)){
+      const eventKey=createHash('sha256')
+        .update('reconciliation|'+run.id+'|payment|'+candidate.id+'|'+providerStatus)
+        .digest('hex');
+      const payloadHash=createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+      await markPaymentFailed(candidate.providerReference,data.gateway_response||providerStatus,
+        eventKey,'reconciliation.transaction.verify',payloadHash);
+      return {...base,providerStatus,outcome:'updated',providerAmountMinor:providerAmount,
+        message:'Payment marked failed after Paystack returned a terminal non-success status.',
+        providerSnapshot:snapshot};
+    }
+    return {...base,providerStatus,outcome:'manual_review',
+      message:'Paystack returned an unrecognised transaction status. No local status was changed.',
+      providerSnapshot:snapshot};
+  }
+
+  if(providerStatus==='success'){
+    const updated=await updatePayoutTransfer(
+      candidate.id,'paid',candidate.providerReference,
+      data.transfer_code?String(data.transfer_code):null,null
+    );
+    await markPayoutReconciled(candidate.id);
+    return {...base,providerStatus,outcome:candidate.localStatus==='paid'?'matched':'updated',
+      providerAmountMinor:providerAmount,
+      message:candidate.localStatus==='paid'?'Payout remains paid according to Paystack.':'Payout marked paid after Paystack transfer verification.',
+      providerSnapshot:snapshot,localStatus:updated?.status||candidate.localStatus};
+  }
+  if(['failed','blocked','rejected','abandoned'].includes(providerStatus)){
+    const updated=await updatePayoutTransfer(
+      candidate.id,'failed',candidate.providerReference,
+      data.transfer_code?String(data.transfer_code):null,'Paystack transfer status: '+providerStatus
+    );
+    await markPayoutReconciled(candidate.id);
+    return {...base,providerStatus,outcome:candidate.localStatus==='failed'?'matched':'updated',
+      providerAmountMinor:providerAmount,
+      message:'Payout status reconciled to failed. Review the gateway response before retrying.',
+      providerSnapshot:snapshot,localStatus:updated?.status||candidate.localStatus};
+  }
+  if(['reversed','reversal'].includes(providerStatus)){
+    const updated=await updatePayoutTransfer(
+      candidate.id,'reversed',candidate.providerReference,
+      data.transfer_code?String(data.transfer_code):null,'Paystack transfer was reversed.'
+    );
+    await markPayoutReconciled(candidate.id);
+    return {...base,providerStatus,outcome:candidate.localStatus==='reversed'?'matched':'updated',
+      providerAmountMinor:providerAmount,
+      message:'Paystack reports a transfer reversal. The payout is marked reversed and requires finance review.',
+      providerSnapshot:snapshot,localStatus:updated?.status||candidate.localStatus};
+  }
+  await markPayoutReconciled(candidate.id);
+  return {...base,providerStatus,outcome:'pending',providerAmountMinor:providerAmount,
+    message:'Transfer remains non-terminal at Paystack. SwiftServe did not initiate another transfer.',
+    providerSnapshot:snapshot};
+}
+
+async function runPaystackReconciliation(limit=50){
+  if(!process.env.PAYSTACK_SECRET_KEY)return fail(503,'PAYMENT_GATEWAY_NOT_CONFIGURED','Configure PAYSTACK_SECRET_KEY before running live reconciliation.');
+  const run=await createFinanceReconciliationRun();
+  const items=[];
+  try{
+    const candidates=await listFinanceReconciliationCandidates(limit);
+    for(const candidate of candidates){
+      let item;
+      try{
+        item=await reconcilePaystackCandidate(run,candidate);
+      }catch(error){
+        item={
+          entityType:candidate.entityType,localEntityId:candidate.id,
+          providerReference:candidate.providerReference,localStatus:candidate.localStatus,
+          localAmountMinor:candidate.amountMinor,currencyCode:candidate.currencyCode,
+          outcome:'error',providerStatus:null,
+          message:'Reconciliation item failed safely: '+String(error?.message||'Unexpected error').slice(0,350),
+          providerSnapshot:{verification:'error'}
+        };
+      }
+      await recordFinanceReconciliationItem(run.id,item);
+      items.push(item);
+    }
+    const completed=await finishFinanceReconciliationRun(run.id,items);
+    await writeAdminAuditEvent({
+      action:'finance.reconciliation.completed',targetType:'reconciliation_run',targetId:run.id,
+      outcome:completed?.status==='completed'?'succeeded':'failed',
+      details:{scannedCount:items.length,matchedCount:completed?.matchedCount||0,
+        updatedCount:completed?.updatedCount||0,pendingCount:completed?.pendingCount||0,
+        reviewCount:completed?.reviewCount||0,errorCount:completed?.errorCount||0,
+        status:completed?.status||'unknown'}
+    });
+    return ok({run:completed,items},201);
+  }catch(error){
+    const completed=await finishFinanceReconciliationRun(run.id,items,'failed').catch(()=>null);
+    await writeAdminAuditEvent({
+      action:'finance.reconciliation.failed',targetType:'reconciliation_run',targetId:run.id,
+      outcome:'failed',details:{scannedCount:items.length,status:completed?.status||'failed'}
+    }).catch(()=>null);
+    throw error;
+  }
+}
+
 async function handleAdminFinanceRoutes(req,url){
   if(!isAdmin(req))return fail(401,'ADMIN_UNAUTHORIZED','A valid platform admin API key is required.');
   if(url.pathname==='/api/v1/admin/payouts/pending'){
